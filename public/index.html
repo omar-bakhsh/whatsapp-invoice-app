@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إرسال الفواتير التلقائي - واتساب</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    <div class="background-bubbles">
+        <div class="bubble"></div>
+        <div class="bubble"></div>
+        <div class="bubble"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header glass">
+            <h1>المسؤول التلقائي - فواتير الواتساب</h1>
+            <p>قم برفع صورة أو مجلد فواتير ليتم استخراج الأرقام وإرسالها فوراً</p>
+        </header>
+
+        <div class="main-content">
+            <!-- Sidebar / Auth Section -->
+            <aside class="auth-section glass">
+                <div id="status-badge" class="badge not-ready">الواتساب غير منفصل</div>
+                <div class="qr-container" id="qr-container">
+                    <p class="qr-text">يرجى مسح الرمز باستخدام تطبيق الواتساب الخاص بك</p>
+                    <img id="qr-image" src="" alt="QR Code" style="display:none;" />
+                    <div id="loader" class="loader"></div>
+                </div>
+                <div id="ready-container" class="ready-container" style="display:none;">
+                    <div class="check-icon">✓</div>
+                    <h2>عظيم! أنت متصل</h2>
+                    <p>يمكنك الآن البدء برفع الفواتير</p>
+                </div>
+            </aside>
+
+            <!-- Upload Section -->
+            <main class="upload-section glass">
+                <div class="upload-tabs">
+                    <button class="tab active" data-type="files">ملفات PDF</button>
+                    <button class="tab" data-type="folder">مجلد كامل</button>
+                </div>
+                
+                <div class="drop-zone" id="drop-zone">
+                    <div class="drop-icon">📄</div>
+                    <h3>اسحب الفواتير وأفلتها هنا</h3>
+                    <p>أو انقر لاختيار الملفات</p>
+                    <input type="file" id="file-input" multiple accept=".pdf" style="display:none;" />
+                    <input type="file" id="folder-input" webkitdirectory directory style="display:none;" />
+                </div>
+                
+                <button id="process-btn" class="process-btn" disabled>إرسال الفواتير</button>
+            </main>
+        </div>
+
+        <!-- Progress Table -->
+        <section class="results-section glass">
+            <h2>سجل الإرسال</h2>
+            <div class="table-container">
+                <table id="results-table">
+                    <thead>
+                        <tr>
+                            <th>اسم الملف</th>
+                            <th>رقم الجوال</th>
+                            <th>الحالة</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-body">
+                        <tr class="empty-row"><td colspan="3">لا توجد عمليات حالية...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
