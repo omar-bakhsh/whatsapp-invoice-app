@@ -16,9 +16,66 @@ const folderInput = document.getElementById('folder-input');
 const processBtn = document.getElementById('process-btn');
 const resultsBody = document.getElementById('results-body');
 
+// Settings Elements
+const uploadView = document.getElementById('upload-view');
+const settingsView = document.getElementById('settings-view');
+const settingMessage = document.getElementById('setting-message');
+const settingLink = document.getElementById('setting-link');
+const settingBlacklist = document.getElementById('setting-blacklist');
+const saveSettingsBtn = document.getElementById('save-settings-btn');
+
 let activeInput = fileInput;
 let selectedFiles = [];
 let isReady = false;
+let appSettings = {};
+
+// Fetch Settings on Load
+async function fetchSettings() {
+    try {
+        const response = await fetch('/api/settings');
+        appSettings = await response.json();
+        
+        // Fill form
+        settingMessage.value = appSettings.messageTemplate;
+        settingLink.value = appSettings.reviewLink;
+        settingBlacklist.value = (appSettings.blacklist || []).join(', ');
+    } catch (err) {
+        console.error('Error fetching settings:', err);
+    }
+}
+fetchSettings();
+
+// Save Settings
+saveSettingsBtn.addEventListener('click', async () => {
+    saveSettingsBtn.disabled = true;
+    saveSettingsBtn.innerHTML = 'جاري الحفظ...';
+    
+    const newSettings = {
+        messageTemplate: settingMessage.value,
+        reviewLink: settingLink.value,
+        blacklist: settingBlacklist.value.split(',').map(n => n.trim()).filter(n => n.length > 0)
+    };
+
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newSettings)
+        });
+
+        if (response.ok) {
+            appSettings = newSettings;
+            alert('تم حفظ الإعدادات بنجاح!');
+        } else {
+            alert('فشل حفظ الإعدادات.');
+        }
+    } catch (err) {
+        console.error('Error saving settings:', err);
+    } finally {
+        saveSettingsBtn.disabled = false;
+        saveSettingsBtn.innerHTML = 'حفظ الإعدادات';
+    }
+});
 
 // Socket Events
 socket.on('qr', (qrDataUrl) => {
@@ -128,7 +185,7 @@ async function extractDataFromPDF(file) {
 
 function findPhoneNumber(text) {
     if (!text) return null;
-    const centerNumbers = ["966566522351", "966556565135"];
+    const blacklist = appSettings.blacklist || [];
     
     const matches = [];
     const match05 = text.match(/\b05\d{8}\b/g);
@@ -137,7 +194,7 @@ function findPhoneNumber(text) {
     const match5 = text.match(/\b5\d{8}\b/g);
     if (match5) match5.forEach(m => matches.push("966" + m));
 
-    const validMatches = matches.filter(num => !centerNumbers.includes(num));
+    const validMatches = matches.filter(num => !blacklist.includes(num));
 
     if (validMatches.length > 1) {
         for (const num of validMatches) {
@@ -155,8 +212,6 @@ function findPhoneNumber(text) {
 function findCustomerName(text) {
     if (!text) return "";
     
-    // 1. Try to find the label and capture following text
-    // Handles RTL/LTR variations and common OCR issues with Arabic letters
     const patterns = [
         /(?:اسم|إسم|ا[\s]?سم)\s+(?:العميل)?[:\s]+([^\n\r\|0-9]{3,40})/i,
         /العميل[:\s]+([^\n\r\|0-9]{3,40})/i
@@ -166,13 +221,11 @@ function findCustomerName(text) {
         const match = text.match(pattern);
         if (match && match[1]) {
             let name = match[1].trim();
-            // Clean up: remove ID numbers or VAT numbers if they leaked in
-            name = name.split(/\s{2,}/)[0]; // Take only the first part if there's a big gap
+            name = name.split(/\s{2,}/)[0];
             name = name.replace(/[\|\_\-\:\d]+$/, "").trim();
             if (name.length > 2) return name;
         }
     }
-
     return "";
 }
 
@@ -181,10 +234,19 @@ tabs.forEach(tab => {
     tab.addEventListener('click', () => {
         tabs.forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
-        activeInput = tab.getAttribute('data-type') === 'files' ? fileInput : folderInput;
-        selectedFiles = [];
-        updateDropZoneUI();
-        checkReadyState();
+        
+        const type = tab.getAttribute('data-type');
+        if (type === 'settings') {
+            uploadView.style.display = 'none';
+            settingsView.style.display = 'block';
+        } else {
+            uploadView.style.display = 'block';
+            settingsView.style.display = 'none';
+            activeInput = type === 'files' ? fileInput : folderInput;
+            selectedFiles = [];
+            updateDropZoneUI();
+            checkReadyState();
+        }
     });
 });
 
@@ -234,11 +296,9 @@ processBtn.addEventListener('click', async () => {
                 continue;
             }
             
-            // If name is too short or just numbers, it's likely a misread label or ID
             const displayName = (extractedData.name && extractedData.name.length > 2) ? extractedData.name : "";
             updateRow(file.name, 'sending', `الرقم: +${extractedData.number} ${displayName ? `(${displayName})` : ''}`);
 
-            // Send to server
             const formData = new FormData();
             formData.append('invoice', file);
             formData.append('phoneNumber', extractedData.number);

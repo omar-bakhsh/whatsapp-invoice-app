@@ -45,17 +45,39 @@
                 <div class="upload-tabs">
                     <button class="tab active" data-type="files">ملفات PDF</button>
                     <button class="tab" data-type="folder">مجلد كامل</button>
+                    <button class="tab" data-type="settings">الإعدادات</button>
                 </div>
                 
-                <div class="drop-zone" id="drop-zone">
-                    <div class="drop-icon">📄</div>
-                    <h3>اسحب الفواتير وأفلتها هنا</h3>
-                    <p>أو انقر لاختيار الملفات</p>
-                    <input type="file" id="file-input" multiple accept=".pdf" style="display:none;" />
-                    <input type="file" id="folder-input" webkitdirectory directory style="display:none;" />
+                <div class="view-container" id="upload-view">
+                    <div class="drop-zone" id="drop-zone">
+                        <div class="drop-icon">📄</div>
+                        <h3>اسحب الفواتير وأفلتها هنا</h3>
+                        <p>أو انقر لاختيار الملفات</p>
+                        <input type="file" id="file-input" multiple accept=".pdf" style="display:none;" />
+                        <input type="file" id="folder-input" webkitdirectory directory style="display:none;" />
+                    </div>
+                    <button id="process-btn" class="process-btn" disabled>إرسال الفواتير</button>
                 </div>
-                
-                <button id="process-btn" class="process-btn" disabled>إرسال الفواتير</button>
+
+                <div class="view-container" id="settings-view" style="display:none;">
+                    <div class="settings-grid">
+                        <div class="input-group">
+                            <label>قالب رسالة الواتساب</label>
+                            <p class="input-hint">استخدم <code>{{name}}</code> للاسم و <code>{{link}}</code> للرابط</p>
+                            <textarea id="setting-message" rows="6" placeholder="اكتب نص الرسالة هنا..."></textarea>
+                        </div>
+                        <div class="input-group">
+                            <label>رابط تقييم جوجل</label>
+                            <input type="text" id="setting-link" placeholder="https://..." />
+                        </div>
+                        <div class="input-group">
+                            <label>أرقام الفروع المستبعدة (Blacklist)</label>
+                            <p class="input-hint">أدخل الأرقام مفصولة بفاصلة (مثال: 966500000000, 966511111111)</p>
+                            <textarea id="setting-blacklist" rows="3" placeholder="966..."></textarea>
+                        </div>
+                        <button id="save-settings-btn" class="save-btn">حفظ الإعدادات</button>
+                    </div>
+                </div>
             </main>
         </div>
 

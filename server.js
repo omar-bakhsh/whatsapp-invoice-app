@@ -13,8 +13,32 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
-app.use(cors());
+app.use(express.json());
 app.use(express.static('public'));
+
+const settingsPath = path.join(__dirname, 'settings.json');
+const defaultSettings = {
+    messageTemplate: "حياك الله أستاذي الكريم{{name}}.. 🌹\n\nنتمنى أن تكون تجربتك في مركز متخصص مازدا قد نالت رضاك. تجد مرفقاً فاتورة صيانة سيارتك بكل تفاصيلها.\n\nكلمة منك تعني لنا الكثير! يسعدنا أن تشاركنا رأيك بضغط زر واحدة هنا:\n{{link}}\n\nدمت بخير، ونحن دائماً في الخدمة. 🙏",
+    reviewLink: "https://reviewthis.biz/4229286a",
+    blacklist: ["966566522351", "966556565135"]
+};
+
+function loadSettings() {
+    if (!fs.existsSync(settingsPath)) {
+        fs.writeFileSync(settingsPath, JSON.stringify(defaultSettings, null, 4));
+        return defaultSettings;
+    }
+    try {
+        const data = fs.readFileSync(settingsPath, 'utf8');
+        return JSON.parse(data);
+    } catch (e) {
+        return defaultSettings;
+    }
+}
+
+function saveSettings(settings) {
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 4));
+}
 
 const uploadPath = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath);
@@ -75,9 +99,22 @@ io.on('connection', (socket) => {
     }
 });
 
+// Settings API
+app.get('/api/settings', (req, res) => {
+    res.json(loadSettings());
+});
+
+app.post('/api/settings', (req, res) => {
+    const newSettings = req.body;
+    if (!newSettings) return res.status(400).json({ error: 'بيانات غير صالحة' });
+    saveSettings(newSettings);
+    res.json({ success: true });
+});
+
 // Extract Phone Number Logic
 function extractPhoneNumber(text) {
-    const centerNumbers = ["966566522351", "966556565135"];
+    const settings = loadSettings();
+    const blacklist = settings.blacklist || [];
     
     // 1. Better search without removing all spaces (to keep word boundaries)
     // This avoids matching parts of the Tax Number (15 digits)
@@ -92,7 +129,7 @@ function extractPhoneNumber(text) {
     if (match5) match5.forEach(m => matches.push("966" + m));
 
     // 2. Filter out center numbers
-    const validMatches = matches.filter(num => !centerNumbers.includes(num));
+    const validMatches = matches.filter(num => !blacklist.includes(num));
 
     // Return the first valid one
     return validMatches.length > 0 ? validMatches[0] : null;
@@ -111,6 +148,7 @@ app.post('/api/send-direct', upload.single('invoice'), async (req, res) => {
         return res.status(400).json({ error: 'الواتساب غير متصل.' });
     }
 
+    const settings = loadSettings();
     const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
     
     try {
@@ -118,7 +156,11 @@ app.post('/api/send-direct', upload.single('invoice'), async (req, res) => {
         const media = MessageMedia.fromFilePath(file.path);
         
         const customerDisplayName = customerName ? ` ${customerName}` : "";
-        const caption = `حياك الله أستاذي الكريم${customerDisplayName}.. 🌹\n\nنتمنى أن تكون تجربتك في مركز متخصص مازدا قد نالت رضاك. تجد مرفقاً فاتورة صيانة سيارتك بكل تفاصيلها.\n\nكلمة منك تعني لنا الكثير! يسعدنا أن تشاركنا رأيك بضغط زر واحدة هنا:\nhttps://reviewthis.biz/4229286a\n\nدمت بخير، ونحن دائماً في الخدمة. 🙏`;
+        
+        // Prepare dynamic caption
+        let caption = settings.messageTemplate || "";
+        caption = caption.replace("{{name}}", customerDisplayName);
+        caption = caption.replace("{{link}}", settings.reviewLink || "");
 
         await client.sendMessage(numberId, media, { caption });
         console.log(`Direct Sent to ${customerDisplayName} (${phoneNumber})`);
