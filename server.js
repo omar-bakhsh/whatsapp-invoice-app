@@ -116,6 +116,7 @@ client.on('disconnected', (reason) => {
     client.initialize().catch(err => {
         console.error("WhatsApp Re-Initialization Error:", err);
     });
+});
 
 client.initialize().catch(err => {
     console.error("WhatsApp Initialization Error:", err);
