@@ -24,10 +24,21 @@ const settingLink = document.getElementById('setting-link');
 const settingBlacklist = document.getElementById('setting-blacklist');
 const saveSettingsBtn = document.getElementById('save-settings-btn');
 
+// Branch Elements
+const branchSelect = document.getElementById('branch-select');
+const addBranchBtn = document.getElementById('add-branch-btn');
+const addBranchModal = document.getElementById('add-branch-modal');
+const saveNewBranchBtn = document.getElementById('save-new-branch-btn');
+const cancelBranchBtn = document.getElementById('cancel-branch-btn');
+const newBranchIdInput = document.getElementById('new-branch-id');
+const newBranchNameInput = document.getElementById('new-branch-name');
+
 let activeInput = fileInput;
 let selectedFiles = [];
 let isReady = false;
 let appSettings = {};
+let currentBranchId = "default";
+let isSwitching = false;
 
 // Fetch Settings on Load
 async function fetchSettings() {
@@ -35,15 +46,102 @@ async function fetchSettings() {
         const response = await fetch('/api/settings');
         appSettings = await response.json();
         
-        // Fill form
-        settingMessage.value = appSettings.messageTemplate;
-        settingLink.value = appSettings.reviewLink;
-        settingBlacklist.value = (appSettings.blacklist || []).join(', ');
+        currentBranchId = appSettings.activeBranch;
+        
+        // Populate branches
+        branchSelect.innerHTML = '';
+        if (appSettings.branches) {
+            for (const [bId, bData] of Object.entries(appSettings.branches)) {
+                const option = document.createElement('option');
+                option.value = bId;
+                option.textContent = bData.name;
+                if (bId === currentBranchId) option.selected = true;
+                branchSelect.appendChild(option);
+            }
+        }
+        
+        updateSettingsForm();
     } catch (err) {
         console.error('Error fetching settings:', err);
     }
 }
 fetchSettings();
+
+function updateSettingsForm() {
+    if (!appSettings.branches || !appSettings.branches[currentBranchId]) return;
+    const branchSettings = appSettings.branches[currentBranchId];
+    settingMessage.value = branchSettings.messageTemplate;
+    settingLink.value = branchSettings.reviewLink;
+    settingBlacklist.value = (branchSettings.blacklist || []).join(', ');
+}
+
+// Branch Switching
+branchSelect.addEventListener('change', async (e) => {
+    const newBranch = e.target.value;
+    if (newBranch === currentBranchId) return;
+    
+    isSwitching = true;
+    loader.style.display = 'block';
+    qrImage.style.display = 'none';
+    readyContainer.style.display = 'none';
+    qrContainer.style.display = 'block';
+    statusBadge.textContent = 'جاري التبديل...';
+    statusBadge.className = 'badge not-ready';
+    
+    try {
+        await fetch('/api/branches/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ branchId: newBranch })
+        });
+    } catch(err) {
+        console.error(err);
+        isSwitching = false;
+    }
+});
+
+// Branch creation modal
+addBranchBtn.addEventListener('click', () => {
+    addBranchModal.style.display = 'flex';
+});
+
+cancelBranchBtn.addEventListener('click', () => {
+    addBranchModal.style.display = 'none';
+    newBranchIdInput.value = '';
+    newBranchNameInput.value = '';
+});
+
+saveNewBranchBtn.addEventListener('click', async () => {
+    const bId = newBranchIdInput.value.trim().toLowerCase().replace(/\s+/g, '');
+    const bName = newBranchNameInput.value.trim();
+    if (!bId || !bName) {
+        alert("الرجاء إدخال بيانات الفرع بشكل صحيح");
+        return;
+    }
+    
+    saveNewBranchBtn.disabled = true;
+    try {
+        const res = await fetch('/api/branches/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ branchId: bId, name: bName })
+        });
+        const result = await res.json();
+        if (result.success) {
+            await fetchSettings();
+            addBranchModal.style.display = 'none';
+            // Auto switch to new branch
+            branchSelect.value = bId;
+            branchSelect.dispatchEvent(new Event('change'));
+        } else {
+            alert(result.error);
+        }
+    } catch(err) {
+        alert("حدث خطأ");
+    } finally {
+        saveNewBranchBtn.disabled = false;
+    }
+});
 
 // Save Settings
 saveSettingsBtn.addEventListener('click', async () => {
@@ -57,15 +155,18 @@ saveSettingsBtn.addEventListener('click', async () => {
     };
 
     try {
-        const response = await fetch('/api/settings', {
+        const response = await fetch(`/api/settings/${currentBranchId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(newSettings)
         });
 
         if (response.ok) {
-            appSettings = newSettings;
-            alert('تم حفظ الإعدادات بنجاح!');
+            appSettings.branches[currentBranchId] = {
+                ...appSettings.branches[currentBranchId],
+                ...newSettings
+            };
+            alert('تم حفظ إعدادات الفرع بنجاح!');
         } else {
             alert('فشل حفظ الإعدادات.');
         }
@@ -78,8 +179,19 @@ saveSettingsBtn.addEventListener('click', async () => {
 });
 
 // Socket Events
+socket.on('branchSwitched', (branchId) => {
+    currentBranchId = branchId;
+    isSwitching = false;
+    if (branchSelect.value !== branchId) {
+        branchSelect.value = branchId;
+    }
+    updateSettingsForm();
+});
+
 socket.on('qr', (qrDataUrl) => {
     loader.style.display = 'none';
+    qrContainer.style.display = 'block';
+    readyContainer.style.display = 'none';
     qrImage.style.display = 'block';
     qrImage.src = qrDataUrl;
 });
@@ -89,16 +201,18 @@ socket.on('ready', (status) => {
     if (status) {
         qrContainer.style.display = 'none';
         readyContainer.style.display = 'block';
-        statusBadge.textContent = 'الواتساب متصل';
+        statusBadge.textContent = `متصل (${branchSelect.options[branchSelect.selectedIndex]?.text || ''})`;
         statusBadge.className = 'badge ready';
         checkReadyState();
     } else {
-        qrContainer.style.display = 'block';
-        readyContainer.style.display = 'none';
-        statusBadge.textContent = 'الواتساب غير متصل';
-        statusBadge.className = 'badge not-ready';
-        qrImage.style.display = 'none';
-        loader.style.display = 'block';
+        if (!isSwitching) {
+            qrContainer.style.display = 'block';
+            readyContainer.style.display = 'none';
+            statusBadge.textContent = 'الواتساب غير متصل';
+            statusBadge.className = 'badge not-ready';
+            qrImage.style.display = 'none';
+            loader.style.display = 'block';
+        }
         checkReadyState();
     }
 });
@@ -190,7 +304,8 @@ async function extractDataFromPDF(file) {
 
 function findPhoneNumber(text) {
     if (!text) return null;
-    const blacklist = appSettings.blacklist || [];
+    const branchSettings = appSettings.branches ? appSettings.branches[currentBranchId] : {};
+    const blacklist = branchSettings ? (branchSettings.blacklist || []) : [];
     
     const matches = [];
     const match05 = text.match(/\b05\d{8}\b/g);
