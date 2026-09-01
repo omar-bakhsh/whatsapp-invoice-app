@@ -3,5 +3,4 @@ uploads/
 .wwebjs_auth/
 .wwebjs_cache/
 .env
-package-lock.json
 *.log

@@ -18,7 +18,7 @@ app.use(express.static('public'));
 
 const settingsPath = path.join(__dirname, 'settings.json');
 const defaultSettings = {
-    messageTemplate: "حياك الله أستاذي الكريم{{name}}.. 🌹\n\nنتمنى أن تكون تجربتك في مركز متخصص مازدا قد نالت رضاك. تجد مرفقاً فاتورة صيانة سيارتك بكل تفاصيلها.\n\nكلمة منك تعني لنا الكثير! يسعدنا أن تشاركنا رأيك بضغط زر واحدة هنا:\n{{link}}\n\nدمت بخير، ونحن دائماً في الخدمة. 🙏",
+    messageTemplate: "حياك الله أستاذي الكريم {{name}} 🌹\n\nنتمنى لك ولسيارتك رحلة آمنة! تجد مرفقاً فاتورة الصيانة الخاصة بك.\n\nإذا كانت تجربتك ممتازة، يسعدنا جداً أن تترك لنا كلمة طيبة بتقييمك هنا:\n{{link}}\n\nأما إن كان لديك أي اقتراح أو ملاحظة لتطوير خدمتنا، فنحن بانتظار رسالتك المباشرة للإدارة عبر الرقم:\n0598260665\n\nفي أمان الله، ودمت بخير. 🙏",
     reviewLink: "https://reviewthis.biz/4229286a",
     blacklist: ["966566522351", "966556565135"]
 };
@@ -51,18 +51,37 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 let isWhatsappReady = false;
+let lastQR = null;
 
 // Initialize WhatsApp Web Client
 const client = new Client({
     authStrategy: new LocalAuth(),
-    puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] } // Good defaults for multiple platforms
+    webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+    },
+    puppeteer: {
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu'
+        ],
+        executablePath: process.env.CHROME_PATH || null
+    }
 });
 
+console.log('Initializing WhatsApp...');
+
 client.on('qr', async (qr) => {
-    console.log('QR RECEIVED, sending to frontend...');
+    console.log('QR RECEIVED: Please scan the QR code on your screen.');
     try {
-        const qrDataUrl = await qrcode.toDataURL(qr);
-        io.emit('qr', qrDataUrl);
+        lastQR = await qrcode.toDataURL(qr);
+        io.emit('qr', lastQR);
     } catch(err) {
         console.error('Error generating QR', err);
     }
@@ -71,11 +90,13 @@ client.on('qr', async (qr) => {
 client.on('ready', () => {
     console.log('WhatsApp Client is ready!');
     isWhatsappReady = true;
+    lastQR = null;
     io.emit('ready', true);
 });
 
 client.on('authenticated', () => {
     console.log('WhatsApp AUTHENTICATED');
+    lastQR = null;
     io.emit('authenticated', true);
 });
 
@@ -87,7 +108,11 @@ client.on('auth_failure', msg => {
 client.on('disconnected', (reason) => {
     console.log('Client was logged out', reason);
     isWhatsappReady = false;
+    lastQR = null;
     io.emit('ready', false);
+    // Suggest restart
+    console.log('Restarting client...');
+    client.initialize();
 });
 
 client.initialize();
@@ -96,6 +121,8 @@ io.on('connection', (socket) => {
     console.log('Frontend client connected');
     if (isWhatsappReady) {
         socket.emit('ready', true);
+    } else if (lastQR) {
+        socket.emit('qr', lastQR);
     }
 });
 
@@ -226,7 +253,7 @@ app.post('/api/process', upload.array('invoices'), async (req, res) => {
     res.json({ success: true, processedCount: req.files.length, results });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3020;
 server.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
 });

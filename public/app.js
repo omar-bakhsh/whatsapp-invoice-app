@@ -109,6 +109,11 @@ socket.on('authenticated', () => {
     document.querySelector('.qr-text').textContent = 'تمت المصادقة، جاري تحميل الواتساب...';
 });
 
+socket.on('error', (message) => {
+    console.error('Socket Error:', message);
+    alert('حدث خطأ في الواتساب: ' + message);
+});
+
 // Update the result table in real-time
 let rowMap = {};
 function updateRow(file, status, message) {
