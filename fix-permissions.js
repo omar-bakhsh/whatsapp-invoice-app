@@ -6,7 +6,8 @@ console.log("Checking Chrome binary permissions...");
 
 const chromePaths = [
     '/local/.cache/puppeteer/chrome',
-    path.join(os.homedir(), '.cache/puppeteer/chrome')
+    path.join(os.homedir(), '.cache/puppeteer/chrome'),
+    path.join(__dirname, '.cache', 'puppeteer', 'chrome')
 ];
 
 let fixed = false;
