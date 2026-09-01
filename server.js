@@ -113,10 +113,13 @@ client.on('disconnected', (reason) => {
     io.emit('ready', false);
     // Suggest restart
     console.log('Restarting client...');
-    client.initialize();
-});
+    client.initialize().catch(err => {
+        console.error("WhatsApp Re-Initialization Error:", err);
+    });
 
-client.initialize();
+client.initialize().catch(err => {
+    console.error("WhatsApp Initialization Error:", err);
+});
 
 io.on('connection', (socket) => {
     console.log('Frontend client connected');
