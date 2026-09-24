@@ -40,46 +40,43 @@ function isDayReportFile(filename) {
     return cleanName.startsWith('day');
 }
 
-// --- Helper: Extract customer name from filename ---
-function extractNameFromFilename(filename) {
-    if (!filename) return "";
-    let clean = path.basename(filename, path.extname(filename)).trim();
-    
-    // Remove timestamp prefix if exists (e.g. 1775642361138-)
-    clean = clean.replace(/^\d{10,14}[-_]/, '');
-    
-    // Remove invoice prefix words
-    clean = clean.replace(/^(?:فاتورة|فاتوره|receipt|invoice)[-_ ]+/i, '');
-    
-    // Split by dash, underscore, plus or slash
-    const parts = clean.split(/[-_+/]/).map(p => p.trim()).filter(Boolean);
-    if (parts.length > 0) {
-        let candidate = parts[0];
-        // Clean trailing/leading numbers, symbols, barcodes
-        candidate = candidate.replace(/[0-9#*]+/g, '').trim();
-        if (candidate.length >= 3 && !/^(شبكة|كاش|تحويل|تابي|تمارا|day)$/i.test(candidate)) {
-            return candidate;
-        }
-    }
-    return "";
-}
-
-// --- Helper: Extract customer name from text ---
+// --- Helper: Extract customer name strictly from inside the invoice text ---
 function findCustomerNameInText(text) {
     if (!text) return "";
+    const cleanText = text.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+
     const patterns = [
-        /(?:اسم\s+العميل|إسم\s+العميل|العميل|السيد|المكرم|حضرة\s+السيد|العميل\s+المكرم)\s*[:/=\-]?\s*([^\n\r\|\d]{3,40})/i,
-        /(?:customer\s*name|client\s*name|customer)\s*[:/=\-]?\s*([^\n\r\|\d]{3,40})/i,
-        /(?:الاسم|الإسم)\s*[:/=\-]?\s*([^\n\r\|\d]{3,40})/i
+        // "اسم العميل : فلان الفلاني" or "اسم العميل/ فلان" or "اسم المشترك"
+        /(?:اسم|إسم|ا[\s]?سم)\s+(?:العميل|المشترك|الزبون|المشتري)\s*[:/=\-]?\s*([^\n\r\|\d]{2,50})/i,
+        
+        // "العميل : فلان الفلاني" or "العميل المكرم :"
+        /(?:العميل\s+المكرم|العميل)\s*[:/=\-]\s*([^\n\r\|\d]{2,50})/i,
+        
+        // "السيد / فلان الفلاني" or "المكرم / فلان" or "الأستاذ :"
+        /(?:السيد|السيد\s+المحترم|المكرم|حضرة\s+السيد|الأستاذ|الاستاذ)\s*[:/=\-]\s*([^\n\r\|\d]{2,50})/i,
+        
+        // "Customer Name: John Doe" or "Client Name:" or "Customer:"
+        /(?:customer\s*name|client\s*name|cust\s*name|customer)\s*[:/=\-]\s*([^\n\r\|\d]{2,50})/i,
+        
+        // "الاسم : فلان الفلاني"
+        /(?:الاسم|الإسم|الاسم\s+الكريم)\s*[:/=\-]\s*([^\n\r\|\d]{2,50})/i
     ];
 
     for (const pattern of patterns) {
-        const match = text.match(pattern);
+        const match = cleanText.match(pattern);
         if (match && match[1]) {
             let name = match[1].trim();
-            name = name.split(/(?:\s{2,}|\t|\n|رقم|جوال|هاتف|تاريخ|date|phone|mobile|vat|ضريبة)/i)[0].trim();
-            name = name.replace(/[\|\_\-\:\d#]+$/, "").trim();
-            if (name.length >= 3 && !/^(الفرع|المؤسسة|الشركة|نقد|شبكة|كاش)$/i.test(name)) {
+            // Stop at newlines, tabs, or common invoice table labels
+            name = name.split(/(?:\n|\r|\t|\s{3,}|رقم|جوال|هاتف|تاريخ|فاتورة|سيارة|لوحة|موديل|date|phone|mobile|tel|inv|vat|tax|sar|ريال)/i)[0].trim();
+            
+            // Clean unwanted punctuation at start or end
+            name = name.replace(/^[:/=\-\s]+|[:/=\-\s\d#*|]+$/g, '').trim();
+            
+            // Remove titles if captured in name
+            name = name.replace(/^(?:السيد|المحترم|المكرم|الأستاذ|الاستاذ|أستاذ|استاذ)\s+/i, '').trim();
+            
+            // Validate length and ensure it's not a generic word
+            if (name.length >= 2 && !/^(الفرع|المؤسسة|الشركة|نقد|شبكة|كاش|تحويل|فاتورة|ضريبة|عقد)$/i.test(name)) {
                 return name;
             }
         }
@@ -356,7 +353,7 @@ function incrementDailyCount(branchId) {
 }
 
 // --- Resolve & Send WhatsApp Message with Anti-Ban Behavior ---
-async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId, originalFileName) {
+async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId) {
     if (!client || !isWhatsappReady) {
         throw new Error('الواتساب غير متصل حالياً.');
     }
@@ -414,17 +411,15 @@ async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId
         }
     }
 
-    // If customerName is empty, attempt extracting from filename
-    if (!customerName || customerName.trim().length === 0) {
-        customerName = extractNameFromFilename(originalFileName || path.basename(filePath));
-    }
-
     const media = MessageMedia.fromFilePath(filePath);
     
     // 2. Prepare Message: FIRST Replace template placeholders ({{name}}, {{link}}, {{branch}})
     let caption = branchSettings.messageTemplate || "";
     
-    const customerDisplayName = (customerName && customerName.trim().length > 0) ? ` ${customerName.trim()}` : "";
+    const validName = (customerName && typeof customerName === 'string' && customerName.trim().length > 0) 
+        ? customerName.trim() 
+        : "";
+    const customerDisplayName = validName ? ` ${validName}` : "";
     const reviewLinkUrl = branchSettings.reviewLink || "";
     const branchNameStr = branchSettings.name || "";
 
@@ -449,7 +444,7 @@ async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId
     // Update daily count
     const totalToday = incrementDailyCount(branchId);
 
-    return { result, resolvedNumber: targetNum, totalToday, customerName: customerName.trim() };
+    return { result, resolvedNumber: targetNum, totalToday, customerName: validName };
 }
 
 // --- API Endpoints ---
@@ -601,7 +596,7 @@ app.post('/api/send-direct', upload.single('invoice'), async (req, res) => {
     }
     
     try {
-        const { resolvedNumber, totalToday, customerName: finalName } = await sendWhatsAppInvoice(phoneNumber, file.path, customerName, activeBranchId, originalName);
+        const { resolvedNumber, totalToday, customerName: finalName } = await sendWhatsAppInvoice(phoneNumber, file.path, customerName, activeBranchId);
         safeUnlink(file.path);
         res.json({ success: true, file: originalName, number: resolvedNumber, totalToday, customerName: finalName });
     } catch (error) {
@@ -631,14 +626,14 @@ app.post('/api/process', upload.array('invoices'), async (req, res) => {
         }
 
         try {
-            io.emit('statusUpdate', { file: originalName, status: 'processing', message: 'جاري استخراج الرقم والاسم...' });
+            io.emit('statusUpdate', { file: originalName, status: 'processing', message: 'جاري استخراج الرقم والاسم من الفاتورة...' });
 
             const dataBuffer = fs.readFileSync(filePath);
             const data = await pdfParse(dataBuffer);
             
             let text = data.text || "";
             let currentNumber = extractPhoneNumber(text, currentBranchId);
-            let customerName = findCustomerNameInText(text) || extractNameFromFilename(originalName);
+            let customerName = findCustomerNameInText(text);
             
             if (!currentNumber || text.trim().length < 5) {
                  results.push({ file: originalName, success: false, reason: 'لم يتم العثور على نص أو رقم جوال.' });
@@ -647,9 +642,9 @@ app.post('/api/process', upload.array('invoices'), async (req, res) => {
                  continue;
             }
 
-            io.emit('statusUpdate', { file: originalName, status: 'sending', message: `الرقم: +${currentNumber} (${customerName || 'عميل'})` });
+            io.emit('statusUpdate', { file: originalName, status: 'sending', message: `الرقم: +${currentNumber} ${customerName ? `(${customerName})` : ''}` });
 
-            await sendWhatsAppInvoice(currentNumber, filePath, customerName, currentBranchId, originalName);
+            await sendWhatsAppInvoice(currentNumber, filePath, customerName, currentBranchId);
             
             results.push({ file: originalName, success: true, number: currentNumber, customerName });
             io.emit('statusUpdate', { file: originalName, status: 'success', message: `تم الإرسال (+${currentNumber})` });
