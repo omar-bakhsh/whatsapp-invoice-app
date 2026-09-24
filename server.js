@@ -32,8 +32,14 @@ function normalizeDigits(str) {
     return str.replace(/[٠-٩]/g, d => arabicDigits.indexOf(d).toString());
 }
 
+// --- Helper: Check if filename starts with "Day" (case-insensitive) ---
+function isDayReportFile(filename) {
+    if (!filename) return false;
+    const cleanName = path.basename(filename).trim().toLowerCase();
+    return cleanName.startsWith('day');
+}
+
 // --- Helper: Spintax Parser for Message Uniqueness ---
-// Example: "{حياك الله|أهلاً بك|مرحباً بك} أستاذ {{name}}" -> randomly chooses one
 function parseSpintax(text) {
     if (!text) return "";
     const spintaxRegex = /\{([^{}]+)\}/g;
@@ -49,10 +55,10 @@ function parseSpintax(text) {
 
 // --- Settings & Branches Logic with Anti-Ban defaults ---
 const DEFAULT_ANTI_BAN = {
-    minDelay: 10,       // Minimum delay in seconds
-    maxDelay: 20,       // Maximum delay in seconds
-    batchSize: 8,       // Number of messages before cooldown
-    batchCooldown: 60,  // Cooldown duration in seconds
+    minDelay: 10,
+    maxDelay: 20,
+    batchSize: 8,
+    batchCooldown: 60,
     simulateTyping: true,
     useSpintax: true,
     dailyLimit: 150
@@ -79,7 +85,6 @@ function migrateSettings(data) {
         };
     }
 
-    // Ensure all branches have antiBan and dailyCount structure
     for (const key of Object.keys(data.branches)) {
         if (!data.branches[key].antiBan) {
             data.branches[key].antiBan = { ...DEFAULT_ANTI_BAN };
@@ -328,29 +333,38 @@ async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId
         targetNum = '966' + targetNum;
     }
 
-    // Resolve WhatsApp contact ID
     let targetId = `${targetNum}@c.us`;
+
+    // Try resolving number id safely without crashing on missing contact model
     try {
         const numberDetails = await client.getNumberId(targetNum);
         if (numberDetails && numberDetails._serialized) {
             targetId = numberDetails._serialized;
         }
     } catch (e) {
-        console.warn(`Could not verify number ID for ${targetNum}:`, e.message);
+        console.warn(`Could not verify number ID for ${targetNum}, using default format:`, e.message);
     }
 
-    // 1. Simulate Human Typing State
-    if (antiBan.simulateTyping) {
+    // 1. Simulate Human Typing State (Safe direct call without calling getChatById)
+    if (antiBan.simulateTyping && client.pupPage) {
         try {
-            const chat = await client.getChatById(targetId).catch(() => null);
-            if (chat) {
-                await chat.sendStateTyping().catch(() => {});
-                // Random typing duration: 2.5 - 4.5 seconds
-                const typingDuration = 2500 + Math.floor(Math.random() * 2000);
-                await new Promise(r => setTimeout(r, typingDuration));
-                await chat.clearState().catch(() => {});
-            }
-        } catch (e) {}
+            await client.pupPage.evaluate(async (chatId) => {
+                if (window.WWebJS && window.WWebJS.sendChatstate) {
+                    await window.WWebJS.sendChatstate('typing', chatId);
+                }
+            }, targetId).catch(() => {});
+            
+            const typingDuration = 2000 + Math.floor(Math.random() * 2000);
+            await new Promise(r => setTimeout(r, typingDuration));
+
+            await client.pupPage.evaluate(async (chatId) => {
+                if (window.WWebJS && window.WWebJS.sendChatstate) {
+                    await window.WWebJS.sendChatstate('stop', chatId);
+                }
+            }, targetId).catch(() => {});
+        } catch (e) {
+            // Non-critical, ignore typing simulation errors
+        }
     }
 
     const media = MessageMedia.fromFilePath(filePath);
@@ -366,8 +380,8 @@ async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId
     caption = caption.replace(/\{\{link\}\}/gi, branchSettings.reviewLink || "");
     caption = caption.replace(/\{\{branch\}\}/gi, branchSettings.name || "");
 
-    // 3. Send message
-    const result = await client.sendMessage(targetId, media, { caption });
+    // 3. Send message with sendSeen: false to avoid unnecessary model serialization errors
+    const result = await client.sendMessage(targetId, media, { caption, sendSeen: false });
     
     // Update daily count
     const totalToday = incrementDailyCount(branchId);
@@ -509,12 +523,19 @@ app.post('/api/send-direct', upload.single('invoice'), async (req, res) => {
         if (file) safeUnlink(file.path);
         return res.status(400).json({ error: 'الملف أو رقم الهاتف مفقود.' });
     }
+    
+    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+
+    // Exclude Day report files
+    if (isDayReportFile(originalName)) {
+        safeUnlink(file.path);
+        return res.status(400).json({ error: 'تم استبعاد هذا الملف لأنه ملف يومي يبدأ بـ Day.' });
+    }
+
     if (!isWhatsappReady || !client) {
         safeUnlink(file.path);
         return res.status(400).json({ error: 'الواتساب غير متصل حالياً.' });
     }
-
-    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
     
     try {
         const { resolvedNumber, totalToday } = await sendWhatsAppInvoice(phoneNumber, file.path, customerName, activeBranchId);
@@ -525,6 +546,61 @@ app.post('/api/send-direct', upload.single('invoice'), async (req, res) => {
         safeUnlink(file.path);
         res.status(500).json({ success: false, error: error.message });
     }
+});
+
+app.post('/api/process', upload.array('invoices'), async (req, res) => {
+    if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'لم يتم رفع أي ملفات.' });
+    if (!isWhatsappReady || !client) return res.status(400).json({ error: 'الواتساب غير متصل.' });
+
+    const results = [];
+    const currentBranchId = activeBranchId; 
+
+    for (const file of req.files) {
+        const filePath = file.path;
+        const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+        
+        // Exclude files starting with "Day"
+        if (isDayReportFile(originalName)) {
+            safeUnlink(filePath);
+            results.push({ file: originalName, success: false, reason: 'تم استبعاد هذا الملف تلقائياً (يبدأ بـ Day).' });
+            io.emit('statusUpdate', { file: originalName, status: 'error', message: 'تم استبعاده (يبدأ بـ Day)' });
+            continue;
+        }
+
+        try {
+            io.emit('statusUpdate', { file: originalName, status: 'processing', message: 'جاري استخراج الرقم...' });
+
+            const dataBuffer = fs.readFileSync(filePath);
+            const data = await pdfParse(dataBuffer);
+            
+            let text = data.text || "";
+            let currentNumber = extractPhoneNumber(text, currentBranchId);
+            
+            if (!currentNumber || text.trim().length < 5) {
+                 results.push({ file: originalName, success: false, reason: 'لم يتم العثور على نص أو رقم جوال.' });
+                 io.emit('statusUpdate', { file: originalName, status: 'error', message: 'لم يتم العثور على رقم جوال' });
+                 safeUnlink(filePath);
+                 continue;
+            }
+
+            io.emit('statusUpdate', { file: originalName, status: 'sending', message: `الرقم: +${currentNumber}` });
+
+            await sendWhatsAppInvoice(currentNumber, filePath, "", currentBranchId);
+            
+            results.push({ file: originalName, success: true, number: currentNumber });
+            io.emit('statusUpdate', { file: originalName, status: 'success', message: `تم الإرسال (+${currentNumber})` });
+
+            safeUnlink(filePath);
+            await new Promise(r => setTimeout(r, 2000));
+
+        } catch (error) {
+            safeUnlink(filePath);
+            results.push({ file: originalName, success: false, reason: error.message });
+            io.emit('statusUpdate', { file: originalName, status: 'error', message: `خطأ: ${error.message}` });
+        }
+    }
+
+    res.json({ success: true, processedCount: req.files.length, results });
 });
 
 const PORT = process.env.PORT || 3020;

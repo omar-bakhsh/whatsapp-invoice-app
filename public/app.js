@@ -104,6 +104,13 @@ function getTodayKey() {
     return new Date().toISOString().slice(0, 10);
 }
 
+// --- Helper: Check if filename starts with "Day" (case-insensitive) ---
+function isDayReportFile(filename) {
+    if (!filename) return false;
+    const cleanName = filename.trim().toLowerCase();
+    return cleanName.startsWith('day');
+}
+
 // --- Arabic Digit Normalizer ---
 function normalizeDigits(str) {
     if (!str) return "";
@@ -446,7 +453,7 @@ navTabs.forEach(tab => {
     });
 });
 
-// --- Batch File Management ---
+// --- Batch File Management with Automatic "Day" Exclusion ---
 dropZone.addEventListener('click', () => activeInput.click());
 fileInput.addEventListener('change', handleBatchFiles);
 folderInput.addEventListener('change', handleBatchFiles);
@@ -470,10 +477,27 @@ dropZone.addEventListener('drop', (e) => {
 });
 
 function handleBatchFiles(e) {
-    const files = Array.from(e.target.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
-    selectedFiles = files;
+    const allFiles = Array.from(e.target.files || []);
+    let dayFilesSkipped = 0;
+
+    const validFiles = allFiles.filter(f => {
+        if (!f.name.toLowerCase().endsWith('.pdf')) return false;
+        
+        // Exclude files starting with "Day" or "day"
+        if (isDayReportFile(f.name)) {
+            dayFilesSkipped++;
+            return false;
+        }
+        return true;
+    });
+
+    selectedFiles = validFiles;
     updateBatchUI();
     checkReadyState();
+
+    if (dayFilesSkipped > 0) {
+        console.log(`[Filter] Automatically excluded ${dayFilesSkipped} file(s) starting with 'Day'.`);
+    }
 }
 
 clearSelectedFilesBtn.addEventListener('click', () => {
@@ -487,7 +511,7 @@ clearSelectedFilesBtn.addEventListener('click', () => {
 function updateBatchUI() {
     if (selectedFiles.length > 0) {
         filesSummaryBar.style.display = 'flex';
-        fileCountBadge.textContent = `${selectedFiles.length} ملف فاتورة محدد`;
+        fileCountBadge.textContent = `${selectedFiles.length} ملف فاتورة محدد (مستبعد ملفات Day تلقائياً)`;
         statTotal.textContent = selectedFiles.length;
     } else {
         filesSummaryBar.style.display = 'none';
@@ -500,11 +524,19 @@ function checkReadyState() {
     directSendBtn.disabled = !(isReady && selectedDirectFile && directPhone.value.trim().length >= 8);
 }
 
-// --- Direct Single Send Handling ---
+// --- Direct Single Send Handling with "Day" file check ---
 directFilePicker.addEventListener('click', () => directFileInput.click());
 directFileInput.addEventListener('change', async (e) => {
     if (e.target.files && e.target.files[0]) {
-        selectedDirectFile = e.target.files[0];
+        const file = e.target.files[0];
+        
+        if (isDayReportFile(file.name)) {
+            alert(`⚠️ تم استبعاد هذا الملف (${file.name}) لأنه ملف تقرير يبدأ بـ Day.`);
+            directFileInput.value = '';
+            return;
+        }
+
+        selectedDirectFile = file;
         directFileName.textContent = `📄 ${selectedDirectFile.name}`;
         
         try {
@@ -524,6 +556,11 @@ directPhone.addEventListener('input', checkReadyState);
 directSendBtn.addEventListener('click', async () => {
     if (!selectedDirectFile || !isReady) return;
     
+    if (isDayReportFile(selectedDirectFile.name)) {
+        alert('⚠️ هذا الملف يبدأ بـ Day وتم استبعاده.');
+        return;
+    }
+
     let rawPhone = normalizeDigits(directPhone.value).replace(/\D/g, '');
     if (rawPhone.startsWith('05')) rawPhone = '966' + rawPhone.substring(1);
     else if (rawPhone.startsWith('5')) rawPhone = '966' + rawPhone;
@@ -684,7 +721,7 @@ async function countdown(seconds, labelPrefix = "فاصل أمان ذكي") {
     antibanTimerBox.style.display = 'none';
 }
 
-// --- Batch Execution Loop with Anti-Ban Pacing ---
+// --- Batch Execution Loop with Anti-Ban Pacing & Day exclusion ---
 processBtn.addEventListener('click', async () => {
     if (selectedFiles.length === 0 || !isReady) return;
 
@@ -696,7 +733,9 @@ processBtn.addEventListener('click', async () => {
     const branch = (appSettings.branches && appSettings.branches[currentBranchId]) || {};
     const antiBan = branch.antiBan || { minDelay: 10, maxDelay: 20, batchSize: 8, batchCooldown: 60 };
 
-    const total = selectedFiles.length;
+    // Filter out any Day files just in case
+    const validBatchFiles = selectedFiles.filter(f => !isDayReportFile(f.name));
+    const total = validBatchFiles.length;
     stats = { total, success: 0, failed: 0 };
     updateStatsUI();
 
@@ -708,7 +747,7 @@ processBtn.addEventListener('click', async () => {
             break;
         }
 
-        const file = selectedFiles[i];
+        const file = validBatchFiles[i];
         const percent = Math.round(((i + 1) / total) * 100);
         progressBarFill.style.width = `${percent}%`;
         progressPercentText.textContent = `${percent}% (${i + 1}/${total})`;
@@ -756,12 +795,10 @@ processBtn.addEventListener('click', async () => {
 
         // Check if more files remain
         if (i < total - 1 && !isProcessingCancelled) {
-            // Check for Batch Cooldown
             if (consecutiveSent > 0 && consecutiveSent % antiBan.batchSize === 0) {
                 const cooldownDuration = antiBan.batchCooldown || 60;
                 await countdown(cooldownDuration, "⏸️ استراحة وتبريد بعد دفعة فواتير (حماية من الحظر)");
             } else {
-                // Random Delay between minDelay and maxDelay
                 const min = antiBan.minDelay || 10;
                 const max = antiBan.maxDelay || 20;
                 const randomSeconds = Math.floor(Math.random() * (max - min + 1)) + min;
