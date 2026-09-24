@@ -40,10 +40,57 @@ function isDayReportFile(filename) {
     return cleanName.startsWith('day');
 }
 
-// --- Helper: Spintax Parser for Message Uniqueness ---
+// --- Helper: Extract customer name from filename ---
+function extractNameFromFilename(filename) {
+    if (!filename) return "";
+    let clean = path.basename(filename, path.extname(filename)).trim();
+    
+    // Remove timestamp prefix if exists (e.g. 1775642361138-)
+    clean = clean.replace(/^\d{10,14}[-_]/, '');
+    
+    // Remove invoice prefix words
+    clean = clean.replace(/^(?:فاتورة|فاتوره|receipt|invoice)[-_ ]+/i, '');
+    
+    // Split by dash, underscore, plus or slash
+    const parts = clean.split(/[-_+/]/).map(p => p.trim()).filter(Boolean);
+    if (parts.length > 0) {
+        let candidate = parts[0];
+        // Clean trailing/leading numbers, symbols, barcodes
+        candidate = candidate.replace(/[0-9#*]+/g, '').trim();
+        if (candidate.length >= 3 && !/^(شبكة|كاش|تحويل|تابي|تمارا|day)$/i.test(candidate)) {
+            return candidate;
+        }
+    }
+    return "";
+}
+
+// --- Helper: Extract customer name from text ---
+function findCustomerNameInText(text) {
+    if (!text) return "";
+    const patterns = [
+        /(?:اسم\s+العميل|إسم\s+العميل|العميل|السيد|المكرم|حضرة\s+السيد|العميل\s+المكرم)\s*[:/=\-]?\s*([^\n\r\|\d]{3,40})/i,
+        /(?:customer\s*name|client\s*name|customer)\s*[:/=\-]?\s*([^\n\r\|\d]{3,40})/i,
+        /(?:الاسم|الإسم)\s*[:/=\-]?\s*([^\n\r\|\d]{3,40})/i
+    ];
+
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+            let name = match[1].trim();
+            name = name.split(/(?:\s{2,}|\t|\n|رقم|جوال|هاتف|تاريخ|date|phone|mobile|vat|ضريبة)/i)[0].trim();
+            name = name.replace(/[\|\_\-\:\d#]+$/, "").trim();
+            if (name.length >= 3 && !/^(الفرع|المؤسسة|الشركة|نقد|شبكة|كاش)$/i.test(name)) {
+                return name;
+            }
+        }
+    }
+    return "";
+}
+
+// --- Helper: Spintax Parser (Strictly requires | to avoid mangling {tags}) ---
 function parseSpintax(text) {
     if (!text) return "";
-    const spintaxRegex = /\{([^{}]+)\}/g;
+    const spintaxRegex = /\{([^{}|]+(?:\|[^{}|]+)+)\}/g;
     let match;
     while ((match = spintaxRegex.exec(text)) !== null) {
         const options = match[1].split('|');
@@ -128,7 +175,6 @@ function saveSettings(settings) {
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 4));
 }
 
-// Migrate settings on start
 let initSettings = loadSettings();
 saveSettings(initSettings);
 
@@ -285,12 +331,12 @@ function extractPhoneNumber(text, branchId) {
     }
 
     // Match 05XXXXXXXX
-    const match05 = normalizedText.match(/\b05\d{8}\b/g);
-    if (match05) match05.forEach(m => matches.push("966" + m.substring(1)));
+    const match05 = normalizedText.match(/\b05[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d\b/g);
+    if (match05) match05.forEach(m => matches.push("966" + m.replace(/\D/g, '').substring(1)));
 
     // Match 5XXXXXXXX
-    const match5 = normalizedText.match(/\b5\d{8}\b/g);
-    if (match5) match5.forEach(m => matches.push("966" + m));
+    const match5 = normalizedText.match(/\b5[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d\b/g);
+    if (match5) match5.forEach(m => matches.push("966" + m.replace(/\D/g, '')));
 
     const uniqueMatches = [...new Set(matches)];
     const validMatches = uniqueMatches.filter(num => !blacklist.includes(num));
@@ -310,7 +356,7 @@ function incrementDailyCount(branchId) {
 }
 
 // --- Resolve & Send WhatsApp Message with Anti-Ban Behavior ---
-async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId) {
+async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId, originalFileName) {
     if (!client || !isWhatsappReady) {
         throw new Error('الواتساب غير متصل حالياً.');
     }
@@ -346,7 +392,7 @@ async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId
         console.warn(`Could not verify number ID for ${targetNum}, using default format:`, e.message);
     }
 
-    // 1. Simulate Human Typing State (Safe direct call without calling getChatById)
+    // 1. Simulate Human Typing State (Direct sendChatstate)
     if (antiBan.simulateTyping && client.pupPage) {
         try {
             await client.pupPage.evaluate(async (chatId) => {
@@ -364,22 +410,38 @@ async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId
                 }
             }, targetId).catch(() => {});
         } catch (e) {
-            // Non-critical, ignore typing simulation errors
+            // Non-critical
         }
+    }
+
+    // If customerName is empty, attempt extracting from filename
+    if (!customerName || customerName.trim().length === 0) {
+        customerName = extractNameFromFilename(originalFileName || path.basename(filePath));
     }
 
     const media = MessageMedia.fromFilePath(filePath);
     
-    // 2. Prepare Message with Spintax Uniqueness
+    // 2. Prepare Message: FIRST Replace template placeholders ({{name}}, {{link}}, {{branch}})
     let caption = branchSettings.messageTemplate || "";
+    
+    const customerDisplayName = (customerName && customerName.trim().length > 0) ? ` ${customerName.trim()}` : "";
+    const reviewLinkUrl = branchSettings.reviewLink || "";
+    const branchNameStr = branchSettings.name || "";
+
+    // Replace both double and single braces
+    caption = caption.replace(/\{\{name\}\}/gi, customerDisplayName);
+    caption = caption.replace(/\{name\}/gi, customerDisplayName);
+    
+    caption = caption.replace(/\{\{link\}\}/gi, reviewLinkUrl);
+    caption = caption.replace(/\{link\}/gi, reviewLinkUrl);
+    
+    caption = caption.replace(/\{\{branch\}\}/gi, branchNameStr);
+    caption = caption.replace(/\{branch\}/gi, branchNameStr);
+
+    // AFTER replacing variables, apply Spintax uniqueness if enabled
     if (antiBan.useSpintax) {
         caption = parseSpintax(caption);
     }
-    
-    const customerDisplayName = customerName ? ` ${customerName}` : "";
-    caption = caption.replace(/\{\{name\}\}/gi, customerDisplayName);
-    caption = caption.replace(/\{\{link\}\}/gi, branchSettings.reviewLink || "");
-    caption = caption.replace(/\{\{branch\}\}/gi, branchSettings.name || "");
 
     // 3. Send message with sendSeen: false to avoid unnecessary model serialization errors
     const result = await client.sendMessage(targetId, media, { caption, sendSeen: false });
@@ -387,7 +449,7 @@ async function sendWhatsAppInvoice(phoneNumber, filePath, customerName, branchId
     // Update daily count
     const totalToday = incrementDailyCount(branchId);
 
-    return { result, resolvedNumber: targetNum, totalToday };
+    return { result, resolvedNumber: targetNum, totalToday, customerName: customerName.trim() };
 }
 
 // --- API Endpoints ---
@@ -539,9 +601,9 @@ app.post('/api/send-direct', upload.single('invoice'), async (req, res) => {
     }
     
     try {
-        const { resolvedNumber, totalToday } = await sendWhatsAppInvoice(phoneNumber, file.path, customerName, activeBranchId);
+        const { resolvedNumber, totalToday, customerName: finalName } = await sendWhatsAppInvoice(phoneNumber, file.path, customerName, activeBranchId, originalName);
         safeUnlink(file.path);
-        res.json({ success: true, file: originalName, number: resolvedNumber, totalToday });
+        res.json({ success: true, file: originalName, number: resolvedNumber, totalToday, customerName: finalName });
     } catch (error) {
         console.error(`Error sending direct ${originalName}:`, error);
         safeUnlink(file.path);
@@ -569,13 +631,14 @@ app.post('/api/process', upload.array('invoices'), async (req, res) => {
         }
 
         try {
-            io.emit('statusUpdate', { file: originalName, status: 'processing', message: 'جاري استخراج الرقم...' });
+            io.emit('statusUpdate', { file: originalName, status: 'processing', message: 'جاري استخراج الرقم والاسم...' });
 
             const dataBuffer = fs.readFileSync(filePath);
             const data = await pdfParse(dataBuffer);
             
             let text = data.text || "";
             let currentNumber = extractPhoneNumber(text, currentBranchId);
+            let customerName = findCustomerNameInText(text) || extractNameFromFilename(originalName);
             
             if (!currentNumber || text.trim().length < 5) {
                  results.push({ file: originalName, success: false, reason: 'لم يتم العثور على نص أو رقم جوال.' });
@@ -584,11 +647,11 @@ app.post('/api/process', upload.array('invoices'), async (req, res) => {
                  continue;
             }
 
-            io.emit('statusUpdate', { file: originalName, status: 'sending', message: `الرقم: +${currentNumber}` });
+            io.emit('statusUpdate', { file: originalName, status: 'sending', message: `الرقم: +${currentNumber} (${customerName || 'عميل'})` });
 
-            await sendWhatsAppInvoice(currentNumber, filePath, "", currentBranchId);
+            await sendWhatsAppInvoice(currentNumber, filePath, customerName, currentBranchId, originalName);
             
-            results.push({ file: originalName, success: true, number: currentNumber });
+            results.push({ file: originalName, success: true, number: currentNumber, customerName });
             io.emit('statusUpdate', { file: originalName, status: 'success', message: `تم الإرسال (+${currentNumber})` });
 
             safeUnlink(filePath);

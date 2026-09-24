@@ -111,6 +111,53 @@ function isDayReportFile(filename) {
     return cleanName.startsWith('day');
 }
 
+// --- Helper: Extract customer name from filename ---
+function extractNameFromFilename(filename) {
+    if (!filename) return "";
+    let clean = filename.replace(/\.pdf$/i, '').trim();
+    
+    // Remove timestamp prefix if exists (e.g. 1775642361138-)
+    clean = clean.replace(/^\d{10,14}[-_]/, '');
+    
+    // Remove invoice prefix words
+    clean = clean.replace(/^(?:فاتورة|فاتوره|receipt|invoice)[-_ ]+/i, '');
+    
+    // Split by dash, underscore, plus or slash
+    const parts = clean.split(/[-_+/]/).map(p => p.trim()).filter(Boolean);
+    if (parts.length > 0) {
+        let candidate = parts[0];
+        // Clean trailing/leading numbers, symbols, barcodes
+        candidate = candidate.replace(/[0-9#*]+/g, '').trim();
+        if (candidate.length >= 3 && !/^(شبكة|كاش|تحويل|تابي|تمارا|day)$/i.test(candidate)) {
+            return candidate;
+        }
+    }
+    return "";
+}
+
+// --- Helper: Extract customer name from text ---
+function findCustomerNameInText(text) {
+    if (!text) return "";
+    const patterns = [
+        /(?:اسم\s+العميل|إسم\s+العميل|العميل|السيد|المكرم|حضرة\s+السيد|العميل\s+المكرم)\s*[:/=\-]?\s*([^\n\r\|\d]{3,40})/i,
+        /(?:customer\s*name|client\s*name|customer)\s*[:/=\-]?\s*([^\n\r\|\d]{3,40})/i,
+        /(?:الاسم|الإسم)\s*[:/=\-]?\s*([^\n\r\|\d]{3,40})/i
+    ];
+
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+            let name = match[1].trim();
+            name = name.split(/(?:\s{2,}|\t|\n|رقم|جوال|هاتف|تاريخ|date|phone|mobile|vat|ضريبة)/i)[0].trim();
+            name = name.replace(/[\|\_\-\:\d#]+$/, "").trim();
+            if (name.length >= 3 && !/^(الفرع|المؤسسة|الشركة|نقد|شبكة|كاش)$/i.test(name)) {
+                return name;
+            }
+        }
+    }
+    return "";
+}
+
 // --- Arabic Digit Normalizer ---
 function normalizeDigits(str) {
     if (!str) return "";
@@ -118,10 +165,10 @@ function normalizeDigits(str) {
     return str.replace(/[٠-٩]/g, d => arabicDigits.indexOf(d).toString());
 }
 
-// --- Spintax Parser for Message Preview ---
+// --- Spintax Parser (Strictly requires | to avoid mangling {tags}) ---
 function parseSpintax(text) {
     if (!text) return "";
-    const spintaxRegex = /\{([^{}]+)\}/g;
+    const spintaxRegex = /\{([^{}|]+(?:\|[^{}|]+)+)\}/g;
     let match;
     while ((match = spintaxRegex.exec(text)) !== null) {
         const options = match[1].split('|');
@@ -201,10 +248,16 @@ function updateLivePreview() {
         : "الفرع الرئيسي";
     const link = settingLink.value || "https://reviewthis.biz/example";
     
-    msg = parseSpintax(msg);
+    // First replace tags
     msg = msg.replace(/\{\{name\}\}/gi, " أ. محمد الشمري");
+    msg = msg.replace(/\{name\}/gi, " أ. محمد الشمري");
     msg = msg.replace(/\{\{link\}\}/gi, link);
+    msg = msg.replace(/\{link\}/gi, link);
     msg = msg.replace(/\{\{branch\}\}/gi, branchName);
+    msg = msg.replace(/\{branch\}/gi, branchName);
+    
+    // Then parse spintax
+    msg = parseSpintax(msg);
     
     previewText.textContent = msg || "(اكتب نص الرسالة في الحقل لمعاينته هنا...)";
 }
@@ -565,8 +618,13 @@ directSendBtn.addEventListener('click', async () => {
     if (rawPhone.startsWith('05')) rawPhone = '966' + rawPhone.substring(1);
     else if (rawPhone.startsWith('5')) rawPhone = '966' + rawPhone;
     
-    const customerName = directName.value.trim();
+    let customerName = directName.value.trim();
     const fileName = selectedDirectFile.name;
+
+    // Fallback extract from filename if user didn't enter name
+    if (!customerName) {
+        customerName = extractNameFromFilename(fileName);
+    }
 
     directSendBtn.disabled = true;
     directSendBtn.innerHTML = '<span>جاري الإرسال ومحاكاة الكتابة...</span>';
@@ -586,8 +644,9 @@ directSendBtn.addEventListener('click', async () => {
 
         const data = await response.json();
         if (response.ok && data.success) {
-            updateRecord(fileName, customerName, rawPhone, 'success', 'تم الإرسال بنجاح');
-            alert(`✅ تم إرسال الفاتورة بنجاح إلى (+${rawPhone})`);
+            const finalName = data.customerName || customerName;
+            updateRecord(fileName, finalName, rawPhone, 'success', 'تم الإرسال بنجاح');
+            alert(`✅ تم إرسال الفاتورة بنجاح إلى ${finalName ? `(${finalName})` : ''} (+${rawPhone})`);
             selectedDirectFile = null;
             directFileName.textContent = 'انقر هنا لاختيار ملف الفاتورة';
             directFileInput.value = '';
@@ -607,7 +666,7 @@ directSendBtn.addEventListener('click', async () => {
     }
 });
 
-// --- Smart Extraction (PDF & OCR) ---
+// --- Smart Extraction (PDF Text & Filename & OCR) ---
 async function extractDataFromPDF(file) {
     try {
         const arrayBuffer = await file.arrayBuffer();
@@ -620,11 +679,11 @@ async function extractDataFromPDF(file) {
         const normalizedText = normalizeDigits(rawText);
         
         let number = findPhoneNumber(normalizedText);
-        let name = findCustomerName(normalizedText);
+        let name = findCustomerNameInText(normalizedText) || extractNameFromFilename(file.name);
         
         if (number) return { number, name: name || "" };
 
-        // 2. High-res OCR fallback
+        // 2. High-res OCR fallback for scanned images
         const viewport = page.getViewport({ scale: 2.2 });
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
@@ -640,11 +699,12 @@ async function extractDataFromPDF(file) {
         
         return {
             number: findPhoneNumber(ocrText),
-            name: name || findCustomerName(ocrText)
+            name: name || findCustomerNameInText(ocrText) || extractNameFromFilename(file.name)
         };
     } catch (err) {
         console.error('Extraction Error:', err);
-        return { number: null, name: "" };
+        // Fallback to filename
+        return { number: null, name: extractNameFromFilename(file.name) };
     }
 }
 
@@ -691,25 +751,6 @@ function findPhoneNumber(text) {
     return validMatches.length > 0 ? validMatches[0] : null;
 }
 
-function findCustomerName(text) {
-    if (!text) return "";
-    const patterns = [
-        /(?:اسم\s+العميل|العميل|السيد|المكرم|حضرة\s+السيد)[:\s]+([^\n\r\|0-9]{3,35})/i,
-        /الاسم[:\s]+([^\n\r\|0-9]{3,35})/i
-    ];
-
-    for (const pattern of patterns) {
-        const match = text.match(pattern);
-        if (match && match[1]) {
-            let name = match[1].trim();
-            name = name.split(/\s{2,}/)[0];
-            name = name.replace(/[\|\_\-\:\d]+$/, "").trim();
-            if (name.length > 2) return name;
-        }
-    }
-    return "";
-}
-
 // --- Anti-Ban Countdown Helper ---
 async function countdown(seconds, labelPrefix = "فاصل أمان ذكي") {
     antibanTimerBox.style.display = 'flex';
@@ -733,7 +774,7 @@ processBtn.addEventListener('click', async () => {
     const branch = (appSettings.branches && appSettings.branches[currentBranchId]) || {};
     const antiBan = branch.antiBan || { minDelay: 10, maxDelay: 20, batchSize: 8, batchCooldown: 60 };
 
-    // Filter out any Day files just in case
+    // Filter out any Day files
     const validBatchFiles = selectedFiles.filter(f => !isDayReportFile(f.name));
     const total = validBatchFiles.length;
     stats = { total, success: 0, failed: 0 };
@@ -766,7 +807,7 @@ processBtn.addEventListener('click', async () => {
             }
 
             const phone = extracted.number;
-            const name = extracted.name || "";
+            const name = extracted.name || extractNameFromFilename(file.name) || "";
             updateRecord(file.name, name, `+${phone}`, "sending", "جاري الإرسال الآمن (محاكاة الكتابة)...");
 
             const formData = new FormData();
@@ -778,7 +819,8 @@ processBtn.addEventListener('click', async () => {
             const data = await res.json();
 
             if (res.ok && data.success) {
-                updateRecord(file.name, name, `+${phone}`, "success", "تم الإرسال بنجاح");
+                const finalName = data.customerName || name;
+                updateRecord(file.name, finalName, `+${phone}`, "success", "تم الإرسال بنجاح");
                 stats.success++;
                 consecutiveSent++;
             } else {
