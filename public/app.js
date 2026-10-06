@@ -3,6 +3,20 @@ const socket = io();
 // PDF.js worker setup
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
+// DOM Elements - Theme & Toasts
+const themeToggleBtn = document.getElementById('theme-toggle-btn');
+const sunIcon = themeToggleBtn?.querySelector('.sun-icon');
+const moonIcon = themeToggleBtn?.querySelector('.moon-icon');
+const toastContainer = document.getElementById('toast-container');
+
+// DOM Elements - Confirm Modal
+const confirmModal = document.getElementById('confirm-modal');
+const confirmModalTitle = document.getElementById('confirm-modal-title');
+const confirmModalDesc = document.getElementById('confirm-modal-desc');
+const confirmModalOk = document.getElementById('confirm-modal-ok');
+const confirmModalCancel = document.getElementById('confirm-modal-cancel');
+let pendingConfirmCallback = null;
+
 // DOM Elements - Session & Stats
 const qrContainer = document.getElementById('qr-container');
 const qrImage = document.getElementById('qr-image');
@@ -34,6 +48,11 @@ const folderInput = document.getElementById('folder-input');
 const filesSummaryBar = document.getElementById('files-summary-bar');
 const fileCountBadge = document.getElementById('file-count-badge');
 const clearSelectedFilesBtn = document.getElementById('clear-selected-files-btn');
+const toggleQueueBtn = document.getElementById('toggle-queue-btn');
+const fileQueuePreview = document.getElementById('file-queue-preview');
+const fileQueueItems = document.getElementById('file-queue-items');
+const queueSizeTotal = document.getElementById('queue-size-total');
+
 const batchProgressContainer = document.getElementById('batch-progress-container');
 const progressBarFill = document.getElementById('progress-bar-fill');
 const progressStatusText = document.getElementById('progress-status-text');
@@ -80,6 +99,7 @@ const settingDailyLimit = document.getElementById('setting-daily-limit');
 const settingSimulateTyping = document.getElementById('setting-simulate-typing');
 
 // Results & Table Elements
+const tableSearchInput = document.getElementById('table-search-input');
 const resultsBody = document.getElementById('results-body');
 const exportCsvBtn = document.getElementById('export-csv-btn');
 const clearResultsBtn = document.getElementById('clear-results-btn');
@@ -96,6 +116,88 @@ let appSettings = {};
 let currentBranchId = "default";
 let isSwitching = false;
 let isProcessingCancelled = false;
+
+// --- Theme Management ---
+function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('wa_theme', theme);
+    if (sunIcon && moonIcon) {
+        if (theme === 'dark') {
+            sunIcon.style.display = 'none';
+            moonIcon.style.display = 'block';
+        } else {
+            sunIcon.style.display = 'block';
+            moonIcon.style.display = 'none';
+        }
+    }
+}
+const savedTheme = localStorage.getItem('wa_theme') || 'light';
+setTheme(savedTheme);
+
+themeToggleBtn?.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    setTheme(current === 'dark' ? 'light' : 'dark');
+    showToast('المظهر', current === 'dark' ? 'تم تفعيل المظهر الفاتح' : 'تم تفعيل المظهر الداكن', 'info', 2000);
+});
+
+// --- Modern Floating Toast Notifications ---
+function showToast(title, desc = '', type = 'info', duration = 3500) {
+    if (!toastContainer) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+
+    let iconSvg = '';
+    if (type === 'success') {
+        iconSvg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>';
+    } else if (type === 'error') {
+        iconSvg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>';
+    } else if (type === 'warning') {
+        iconSvg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+    } else {
+        iconSvg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>';
+    }
+
+    toast.innerHTML = `
+        <div class="toast-icon">${iconSvg}</div>
+        <div class="toast-content">
+            <div class="toast-title">${title}</div>
+            ${desc ? `<div class="toast-desc">${desc}</div>` : ''}
+        </div>
+    `;
+
+    toastContainer.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.add('toast-hiding');
+        setTimeout(() => toast.remove(), 250);
+    }, duration);
+}
+
+// --- Custom Confirmation Modal ---
+function showConfirm(title, desc, onConfirm) {
+    if (!confirmModal) {
+        if (confirm(`${title}\n${desc}`)) onConfirm();
+        return;
+    }
+    confirmModalTitle.textContent = title;
+    confirmModalDesc.textContent = desc;
+    pendingConfirmCallback = onConfirm;
+    confirmModal.style.display = 'flex';
+}
+
+confirmModalOk?.addEventListener('click', () => {
+    confirmModal.style.display = 'none';
+    if (pendingConfirmCallback) {
+        pendingConfirmCallback();
+        pendingConfirmCallback = null;
+    }
+});
+
+confirmModalCancel?.addEventListener('click', () => {
+    confirmModal.style.display = 'none';
+    pendingConfirmCallback = null;
+});
 
 // Statistics & Records
 let records = [];
@@ -315,7 +417,7 @@ saveNewBranchBtn.addEventListener('click', async () => {
     const bId = newBranchIdInput.value.trim().toLowerCase().replace(/\s+/g, '-');
     const bName = newBranchNameInput.value.trim();
     if (!bId || !bName) {
-        alert("الرجاء إدخال رمز واسم الفرع بشكل صحيح");
+        showToast("تنبيه", "الرجاء إدخال رمز واسم الفرع بشكل صحيح", "warning");
         return;
     }
     
@@ -334,32 +436,38 @@ saveNewBranchBtn.addEventListener('click', async () => {
             newBranchNameInput.value = '';
             branchSelect.value = bId;
             branchSelect.dispatchEvent(new Event('change'));
+            showToast("تم إنشاء الفرع", `تمت إضافة فرع "${bName}" بنجاح`, "success");
         } else {
-            alert(result.error);
+            showToast("خطأ", result.error || "تعذر إنشاء الفرع", "error");
         }
     } catch(err) {
-        alert("حدث خطأ أثناء إنشاء الفرع");
+        showToast("خطأ", "حدث خطأ أثناء إنشاء الفرع", "error");
     } finally {
         saveNewBranchBtn.disabled = false;
     }
 });
 
 // Delete Branch
-deleteBranchBtn.addEventListener('click', async () => {
-    if (!confirm(`هل أنت متأكد من حذف فرع (${branchSelect.options[branchSelect.selectedIndex]?.text || currentBranchId})؟`)) return;
-    
-    try {
-        const res = await fetch(`/api/branches/${currentBranchId}`, { method: 'DELETE' });
-        const result = await res.json();
-        if (result.success) {
-            await fetchSettings();
-            alert('تم حذف الفرع بنجاح');
-        } else {
-            alert(result.error || 'تعذر حذف الفرع');
+deleteBranchBtn.addEventListener('click', () => {
+    const branchTitle = branchSelect.options[branchSelect.selectedIndex]?.text || currentBranchId;
+    showConfirm(
+        "حذف الفرع",
+        `هل أنت متأكد من رغبتك في حذف فرع (${branchTitle})؟ سيتم مسح إعدادات هذا الفرع.`,
+        async () => {
+            try {
+                const res = await fetch(`/api/branches/${currentBranchId}`, { method: 'DELETE' });
+                const result = await res.json();
+                if (result.success) {
+                    await fetchSettings();
+                    showToast("تم الحذف", "تم حذف الفرع بنجاح", "success");
+                } else {
+                    showToast("خطأ", result.error || 'تعذر حذف الفرع', "error");
+                }
+            } catch (e) {
+                showToast("خطأ", "حدث خطأ أثناء حذف الفرع", "error");
+            }
         }
-    } catch (e) {
-        alert('حدث خطأ أثناء الحذف');
-    }
+    );
 });
 
 // Save Settings & Anti-Ban Config
@@ -395,12 +503,13 @@ saveSettingsBtn.addEventListener('click', async () => {
                 ...newSettings
             };
             updateDailyQuotaDisplay();
-            alert('✅ تم حفظ إعدادات الفرع والحماية من الحظر بنجاح!');
+            showToast("تم الحفظ", "تم حفظ إعدادات الفرع ودرع الحماية بنجاح", "success");
         } else {
-            alert('فشل حفظ الإعدادات.');
+            showToast("خطأ", "فشل حفظ الإعدادات على الخادم", "error");
         }
     } catch (err) {
         console.error('Error saving settings:', err);
+        showToast("خطأ", "حدث خطأ في الاتصال أثناء حفظ الإعدادات", "error");
     } finally {
         saveSettingsBtn.disabled = false;
         saveSettingsBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg><span>حفظ إعدادات الفرع والحماية</span>';
@@ -408,33 +517,48 @@ saveSettingsBtn.addEventListener('click', async () => {
 });
 
 // WhatsApp Session Management
-refreshSessionBtn.addEventListener('click', async () => {
-    if (confirm('هل تريد إعادة محاولة تهيئة جلسة واتساب وتحديث الرمز؟')) {
-        loader.style.display = 'flex';
-        qrImage.style.display = 'none';
-        statusBadge.querySelector('.status-text').textContent = 'جاري إعادة التهيئة...';
-        await fetch('/api/whatsapp/restart', { method: 'POST' });
-    }
+refreshSessionBtn.addEventListener('click', () => {
+    showConfirm(
+        "إعادة محاولة الاتصال",
+        "هل تريد إعادة محاولة تهيئة جلسة واتساب وتحديث رمز الاستجابة السريعة (QR)؟",
+        async () => {
+            loader.style.display = 'flex';
+            qrImage.style.display = 'none';
+            statusBadge.querySelector('.status-text').textContent = 'جاري إعادة التهيئة...';
+            showToast("واتساب", "جاري إعادة تشغيل جلسة الواتساب وتحديث الرمز...", "info");
+            await fetch('/api/whatsapp/restart', { method: 'POST' });
+        }
+    );
 });
 
 if (resetSessionBtn) {
-    resetSessionBtn.addEventListener('click', async () => {
-        if (confirm('هل أنت متأكد من مسح الجلسة والبدء من جديد؟\nسيتم حذف بيانات الجلسة المؤقتة لهذا الفرع وتوليد كود QR جديد كلياً.')) {
-            loader.style.display = 'flex';
-            qrImage.style.display = 'none';
-            statusBadge.querySelector('.status-text').textContent = 'جاري مسح الجلسة...';
-            await fetch('/api/whatsapp/reset', { method: 'POST' });
-        }
+    resetSessionBtn.addEventListener('click', () => {
+        showConfirm(
+            "مسح الجلسة والبدء من جديد",
+            "سيتم حذف بيانات الجلسة المؤقتة لهذا الفرع وتوليد كود QR جديد كلياً. هل تريد المتابعة؟",
+            async () => {
+                loader.style.display = 'flex';
+                qrImage.style.display = 'none';
+                statusBadge.querySelector('.status-text').textContent = 'جاري مسح الجلسة...';
+                showToast("واتساب", "جاري مسح الجلسة وتوليد رمز QR جديد...", "warning");
+                await fetch('/api/whatsapp/reset', { method: 'POST' });
+            }
+        );
     });
 }
 
-logoutBtn.addEventListener('click', async () => {
-    if (confirm('هل أنت متأكد من رغبتك في تسجيل الخروج من واتساب لهذا الفرع؟')) {
-        loader.style.display = 'flex';
-        qrImage.style.display = 'none';
-        statusBadge.querySelector('.status-text').textContent = 'جاري تسجيل الخروج...';
-        await fetch('/api/whatsapp/logout', { method: 'POST' });
-    }
+logoutBtn?.addEventListener('click', () => {
+    showConfirm(
+        "تسجيل الخروج",
+        "هل أنت متأكد من رغبتك في تسجيل الخروج من واتساب لهذا الفرع؟",
+        async () => {
+            loader.style.display = 'flex';
+            qrImage.style.display = 'none';
+            statusBadge.querySelector('.status-text').textContent = 'جاري تسجيل الخروج...';
+            showToast("واتساب", "جاري تسجيل الخروج...", "info");
+            await fetch('/api/whatsapp/logout', { method: 'POST' });
+        }
+    );
 });
 
 // Socket.io Real-time Events
@@ -591,15 +715,63 @@ clearSelectedFilesBtn.addEventListener('click', () => {
     folderInput.value = '';
     updateBatchUI();
     checkReadyState();
+    showToast("إلغاء التحديد", "تم تفريغ قائمة الفواتير المحددة", "info", 2000);
 });
+
+toggleQueueBtn?.addEventListener('click', () => {
+    if (fileQueuePreview.style.display === 'none') {
+        fileQueuePreview.style.display = 'block';
+        toggleQueueBtn.querySelector('span').textContent = 'إخفاء القائمة';
+    } else {
+        fileQueuePreview.style.display = 'none';
+        toggleQueueBtn.querySelector('span').textContent = 'عرض قائمة الفواتير';
+    }
+});
+
+function renderFileQueue() {
+    if (!fileQueueItems) return;
+    fileQueueItems.innerHTML = '';
+    let totalBytes = 0;
+
+    selectedFiles.forEach((file, index) => {
+        totalBytes += file.size || 0;
+        const chip = document.createElement('div');
+        chip.className = 'file-queue-chip';
+        const formattedSize = file.size ? ((file.size / 1024).toFixed(0) + ' KB') : '';
+        chip.innerHTML = `
+            <span class="chip-name" title="${file.name}">${file.name}</span>
+            <span style="font-size:0.7rem; opacity:0.7">${formattedSize}</span>
+            <button type="button" class="chip-remove" data-index="${index}" title="إزالة هذا الملف">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        `;
+        fileQueueItems.appendChild(chip);
+    });
+
+    if (queueSizeTotal) {
+        queueSizeTotal.textContent = (totalBytes / (1024 * 1024)).toFixed(2) + ' MB إجمالي الحجم';
+    }
+
+    fileQueueItems.querySelectorAll('.chip-remove').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const idx = parseInt(e.currentTarget.getAttribute('data-index'));
+            selectedFiles.splice(idx, 1);
+            updateBatchUI();
+            checkReadyState();
+        });
+    });
+}
 
 function updateBatchUI() {
     if (selectedFiles.length > 0) {
         filesSummaryBar.style.display = 'flex';
-        fileCountBadge.textContent = `${selectedFiles.length} ملف فاتورة محدد (مستبعد ملفات Day تلقائياً)`;
+        fileCountBadge.textContent = `${selectedFiles.length} ملف فاتورة محدد (مستبعد ملفات Day)`;
         statTotal.textContent = selectedFiles.length;
+        renderFileQueue();
     } else {
         filesSummaryBar.style.display = 'none';
+        if (fileQueuePreview) fileQueuePreview.style.display = 'none';
+        if (toggleQueueBtn) toggleQueueBtn.querySelector('span').textContent = 'عرض قائمة الفواتير';
         statTotal.textContent = '0';
     }
 }
@@ -616,13 +788,13 @@ directFileInput.addEventListener('change', async (e) => {
         const file = e.target.files[0];
         
         if (isDayReportFile(file.name)) {
-            alert(`⚠️ تم استبعاد هذا الملف (${file.name}) لأنه ملف تقرير يبدأ بـ Day.`);
+            showToast("ملف مستبعد", `تم استبعاد (${file.name}) لأنه ملف تقرير يومي Day.`, "warning");
             directFileInput.value = '';
             return;
         }
 
         selectedDirectFile = file;
-        directFileName.textContent = `📄 ${selectedDirectFile.name}`;
+        directFileName.textContent = selectedDirectFile.name;
         
         try {
             const extracted = await extractDataFromPDF(selectedDirectFile);
@@ -632,6 +804,7 @@ directFileInput.addEventListener('change', async (e) => {
             if (extracted.name && !directName.value) {
                 directName.value = extracted.name;
             }
+            showToast("استخراج البيانات", "تم تحليل بيانات الفاتورة بنجاح", "info", 2000);
         } catch (err) {}
         checkReadyState();
     }
@@ -642,7 +815,7 @@ directSendBtn.addEventListener('click', async () => {
     if (!selectedDirectFile || !isReady) return;
     
     if (isDayReportFile(selectedDirectFile.name)) {
-        alert('⚠️ هذا الملف يبدأ بـ Day وتم استبعاده.');
+        showToast("ملف مستبعد", "هذا الملف يبدأ بـ Day وتم استبعاده.", "warning");
         return;
     }
 
@@ -673,7 +846,7 @@ directSendBtn.addEventListener('click', async () => {
         if (response.ok && data.success) {
             const finalName = data.customerName || customerName;
             updateRecord(fileName, finalName, rawPhone, 'success', 'تم الإرسال بنجاح');
-            alert(`✅ تم إرسال الفاتورة بنجاح إلى ${finalName ? `(${finalName})` : ''} (+${rawPhone})`);
+            showToast("تم الإرسال", `تم إرسال الفاتورة بنجاح إلى ${finalName ? `(${finalName})` : ''} (+${rawPhone})`, "success");
             selectedDirectFile = null;
             directFileName.textContent = 'انقر هنا لاختيار ملف الفاتورة';
             directFileInput.value = '';
@@ -682,10 +855,11 @@ directSendBtn.addEventListener('click', async () => {
             fetchSettings();
         } else {
             updateRecord(fileName, customerName, rawPhone, 'error', data.error || 'فشل الإرسال');
-            alert(`❌ تعذر الإرسال: ${data.error || 'خطأ غير معروف'}`);
+            showToast("تعذر الإرسال", data.error || "خطأ غير معروف أثناء الإرسال", "error");
         }
     } catch (err) {
         updateRecord(fileName, customerName, rawPhone, 'error', 'خطأ في الاتصال بالخادم');
+        showToast("خطأ بالخادم", "تعذر الاتصال بالخادم أثناء الإرسال", "error");
     } finally {
         directSendBtn.disabled = false;
         directSendBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg><span>إرسال الفاتورة الآن (مع محاكاة الكتابة)</span>';
@@ -855,7 +1029,7 @@ processBtn.addEventListener('click', async () => {
 
     for (let i = 0; i < total; i++) {
         if (isProcessingCancelled) {
-            alert('تم إيقاف عملية الإرسال.');
+            showToast("إيقاف الإرسال", "تم إيقاف معالجة الدفعة الحالية", "warning");
             break;
         }
 
@@ -984,12 +1158,17 @@ function renderRow(rec, isNew = false) {
     let badgeClass = rec.status;
 
     tr.innerHTML = `
-        <td style="color: #94a3b8; font-weight: bold;">${rec.id}</td>
+        <td style="color: var(--dark-muted); font-weight: bold;">${rec.id}</td>
         <td style="font-weight: 700; color: var(--dark);">${rec.file}</td>
-        <td>${rec.name}</td>
+        <td>${rec.name || '---'}</td>
         <td dir="ltr" style="text-align:right; font-family:monospace; font-weight:700;">${rec.phone}</td>
-        <td><span class="status-badge-inline ${badgeClass}">${rec.message}</span></td>
-        <td style="color: #64748b; font-size: 0.8rem;">${rec.time}</td>
+        <td>
+            <span class="status-badge-inline ${badgeClass}">
+                <span class="badge-dot"></span>
+                <span>${rec.message}</span>
+            </span>
+        </td>
+        <td style="color: var(--dark-muted); font-size: 0.8rem;">${rec.time}</td>
     `;
 }
 
@@ -1005,38 +1184,54 @@ function updateFilterCounts() {
     countError.textContent = records.filter(r => r.status === 'error').length;
 }
 
-// Table Filter
+// Table Filter & Search
+function applyTableFilters() {
+    const activeChip = document.querySelector('.filter-chip.active');
+    const filter = activeChip ? activeChip.getAttribute('data-filter') : 'all';
+    const searchQuery = (tableSearchInput?.value || '').toLowerCase().trim();
+
+    Object.values(recordRows).forEach(tr => {
+        const matchesStatus = (filter === 'all' || tr.dataset.status === filter);
+        const matchesSearch = !searchQuery || tr.textContent.toLowerCase().includes(searchQuery);
+
+        if (matchesStatus && matchesSearch) {
+            tr.style.display = '';
+        } else {
+            tr.style.display = 'none';
+        }
+    });
+}
+
 filterChips.forEach(chip => {
     chip.addEventListener('click', () => {
         filterChips.forEach(c => c.classList.remove('active'));
         chip.classList.add('active');
-        const filter = chip.getAttribute('data-filter');
-
-        Object.values(recordRows).forEach(tr => {
-            if (filter === 'all' || tr.dataset.status === filter) {
-                tr.style.display = '';
-            } else {
-                tr.style.display = 'none';
-            }
-        });
+        applyTableFilters();
     });
 });
+
+tableSearchInput?.addEventListener('input', applyTableFilters);
 
 // Clear Log
 clearResultsBtn.addEventListener('click', () => {
     if (records.length === 0) return;
-    if (confirm('هل تريد مسح سجل العمليات الحالي؟')) {
-        records = [];
-        recordRows = {};
-        resultsBody.innerHTML = '<tr class="empty-row"><td colspan="6">لا توجد عمليات إرسال حتى الآن. قم برفع الفواتير للبدء.</td></tr>';
-        updateFilterCounts();
-    }
+    showConfirm(
+        "مسح السجل",
+        "هل أنت متأكد من رغبتك في مسح سجل العمليات الحالي بالكامل؟",
+        () => {
+            records = [];
+            recordRows = {};
+            resultsBody.innerHTML = '<tr class="empty-row"><td colspan="6">لا توجد عمليات إرسال حتى الآن. قم برفع الفواتير للبدء.</td></tr>';
+            updateFilterCounts();
+            showToast("مسح السجل", "تم مسح سجل العمليات بنجاح", "info");
+        }
+    );
 });
 
 // Export to CSV
 exportCsvBtn.addEventListener('click', () => {
     if (records.length === 0) {
-        alert('لا توجد بيانات لتصديرها.');
+        showToast("تنبيه", "لا توجد عمليات مسجلة لتصديرها.", "warning");
         return;
     }
 
@@ -1053,4 +1248,5 @@ exportCsvBtn.addEventListener('click', () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    showToast("تصدير السجل", "تم تحميل ملف Excel (CSV) بنجاح", "success");
 });

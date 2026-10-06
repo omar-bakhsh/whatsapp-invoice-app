@@ -49,6 +49,10 @@
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                 </div>
+                <button id="theme-toggle-btn" class="btn btn-outline btn-sm btn-icon-only theme-btn" title="تبديل المظهر الداكن / الفاتح">
+                    <svg class="sun-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+                    <svg class="moon-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+                </button>
             </div>
         </header>
 
@@ -216,10 +220,25 @@
                             <span class="file-count-chip" id="file-count-badge">0 ملفات محددة</span>
                             <span class="hint-text">جاهز للإرسال الآمن مع التبريد الذكي</span>
                         </div>
-                        <button id="clear-selected-files-btn" class="btn btn-outline btn-sm">
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                            <span>إلغاء التحديد</span>
-                        </button>
+                        <div class="summary-actions">
+                            <button id="toggle-queue-btn" class="btn btn-outline btn-sm">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+                                <span>عرض قائمة الفواتير</span>
+                            </button>
+                            <button id="clear-selected-files-btn" class="btn btn-outline btn-sm">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                <span>إلغاء التحديد</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Selected Files Detailed List Drawer -->
+                    <div id="file-queue-preview" class="file-queue-preview" style="display:none;">
+                        <div class="queue-list-header">
+                            <span>الملفات المجهزة في طابور الإرسال:</span>
+                            <span id="queue-size-total" class="queue-meta-text">0 MB</span>
+                        </div>
+                        <div id="file-queue-items" class="file-queue-items"></div>
                     </div>
 
                     <!-- Batch Progress & Anti-Ban Cooldown Bar -->
@@ -409,6 +428,10 @@
                     <p class="subtitle">متابعة فورية لحالة كل فاتورة ورقم العميل</p>
                 </div>
                 <div class="table-actions">
+                    <div class="search-input-wrapper">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <input type="text" id="table-search-input" placeholder="بحث سريع عن عميل أو رقم..." />
+                    </div>
                     <div class="filter-chips">
                         <button class="filter-chip active" data-filter="all">الكل (<span id="count-all">0</span>)</button>
                         <button class="filter-chip" data-filter="success">ناجحة (<span id="count-success">0</span>)</button>
@@ -468,6 +491,24 @@
             </div>
         </div>
     </div>
+
+    <!-- Generic Confirm Dialog Modal -->
+    <div id="confirm-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-content confirm-modal-card glass-card">
+            <div class="modal-icon-header" id="confirm-modal-icon">
+                <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+            </div>
+            <h3 id="confirm-modal-title">تأكيد الإجراء</h3>
+            <p id="confirm-modal-desc">هل أنت متأكد من رغبتك في المتابعة؟</p>
+            <div class="modal-footer">
+                <button id="confirm-modal-ok" class="btn btn-danger">تأكيد ومتابعة</button>
+                <button id="confirm-modal-cancel" class="btn btn-outline">إلغاء</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modern Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
 
     <script src="app.js"></script>
 </body>
