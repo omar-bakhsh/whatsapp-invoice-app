@@ -26,11 +26,15 @@ app.use(express.static('public'));
 
 const settingsPath = path.join(__dirname, 'settings.json');
 
-// --- Helper: Convert Arabic-Indic digits to Latin digits ---
+// --- Helper: Convert Arabic-Indic & Persian digits to Latin digits and strip invisible chars ---
 function normalizeDigits(str) {
     if (!str) return "";
+    let cleaned = String(str).replace(/[\u200B-\u200F\u202A-\u202E\uFEFF\u00A0]/g, ' ');
     const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-    return str.replace(/[٠-٩]/g, d => arabicDigits.indexOf(d).toString());
+    cleaned = cleaned.replace(/[٠-٩]/g, d => arabicDigits.indexOf(d).toString());
+    const persianDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+    cleaned = cleaned.replace(/[۰-۹]/g, d => persianDigits.indexOf(d).toString());
+    return cleaned;
 }
 
 // --- Helper: Check if filename starts with "Day" (case-insensitive) ---
@@ -225,9 +229,10 @@ async function initializeBranch(branchId) {
 
     client = new Client({
         authStrategy: new LocalAuth({ clientId: branchId }),
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
         webVersionCache: {
             type: 'remote',
-            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1018911162-alpha.html',
+            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
             strict: false
         },
         takeoverOnConflict: true,
@@ -241,7 +246,8 @@ async function initializeBranch(branchId) {
                 '--disable-accelerated-2d-canvas',
                 '--no-first-run',
                 '--no-zygote',
-                '--disable-gpu'
+                '--disable-gpu',
+                '--disable-blink-features=AutomationControlled'
             ],
             executablePath: process.env.CHROME_PATH || null
         }
@@ -264,6 +270,11 @@ async function initializeBranch(branchId) {
         io.emit('ready', true);
     });
 
+    client.on('loading_screen', (percent, message) => {
+        console.log(`[Branch ${branchId}] Loading: ${percent}% - ${message}`);
+        io.emit('loadingScreen', { percent, message });
+    });
+
     client.on('authenticated', () => {
         console.log(`[Branch ${branchId}] AUTHENTICATED`);
         lastQR = null;
@@ -272,7 +283,7 @@ async function initializeBranch(branchId) {
 
     client.on('auth_failure', msg => {
         console.error(`[Branch ${branchId}] AUTH FAILURE`, msg);
-        io.emit('error', 'فشلت المصادقة: ' + msg);
+        io.emit('error', 'فشلت المصادقة: ' + (msg?.message || msg));
     });
 
     client.on('disconnected', (reason) => {
@@ -289,8 +300,9 @@ async function initializeBranch(branchId) {
     });
 
     client.initialize().catch(err => {
-        console.error(`[Branch ${branchId}] Init Error:`, err);
-        io.emit('error', 'تعذر تشغيل متصفح الواتساب: ' + err.message);
+        const errorMsg = (err && err.message) ? err.message : String(err);
+        console.error(`[Branch ${branchId}] Init Error:`, errorMsg);
+        io.emit('error', 'تعذر تشغيل متصفح الواتساب: ' + errorMsg);
     });
 }
 
@@ -306,39 +318,78 @@ io.on('connection', (socket) => {
     }
 });
 
-// --- Phone Extraction Helper ---
-function extractPhoneNumber(text, branchId) {
-    if (!text) return null;
-    const normalizedText = normalizeDigits(text);
-
+// --- Phone Extraction Helper (Robust Multi-Strategy & Context-Aware) ---
+function extractPhoneNumber(text, branchId, filename = "") {
+    if (!text && !filename) return null;
     const settings = loadSettings();
     const branchSettings = settings.branches[branchId] || {};
     const blacklist = (branchSettings.blacklist || []).map(b => normalizeDigits(b).replace(/\D/g, ''));
     
-    const matches = [];
+    const cleanText = normalizeDigits(text || "");
+    const candidates = [];
 
-    // Match 009665XXXXXXXX or +9665XXXXXXXX
-    const matchIntl = normalizedText.match(/(?:\+966|00966)[\s-]?([5]\d{8})\b/g);
-    if (matchIntl) {
-        matchIntl.forEach(m => {
-            const clean = m.replace(/\D/g, '');
-            if (clean.startsWith('00966')) matches.push('966' + clean.substring(5));
-            else if (clean.startsWith('966')) matches.push(clean);
-        });
+    function addCandidate(raw, score = 0) {
+        if (!raw) return;
+        let digits = normalizeDigits(raw).replace(/\D/g, '');
+        if (digits.startsWith('00966')) digits = digits.slice(2);
+        if (digits.startsWith('96605')) digits = '966' + digits.slice(4);
+        if (digits.startsWith('05') && digits.length === 10) digits = '966' + digits.slice(1);
+        if (digits.startsWith('5') && digits.length === 9) digits = '966' + digits;
+
+        if (digits.length === 12 && digits.startsWith('9665')) {
+            if (!blacklist.includes(digits) && !blacklist.includes('0' + digits.slice(3))) {
+                candidates.push({ number: digits, score });
+            }
+        }
     }
 
-    // Match 05XXXXXXXX
-    const match05 = normalizedText.match(/\b05[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d\b/g);
-    if (match05) match05.forEach(m => matches.push("966" + m.replace(/\D/g, '').substring(1)));
+    // 1. Keyword-based matching (Highest score: 100)
+    const keywordRegex = /(?:جوال|موبايل|هاتف|تلفون|phone|mobile|tel|cell|contact)[\s\S]{0,25}?((?:\+?966|00966|0)?5[\d\s\-\.\/\(\)]{7,15}\d)/gi;
+    let kwMatch;
+    while ((kwMatch = keywordRegex.exec(cleanText)) !== null) {
+        addCandidate(kwMatch[1], 100);
+    }
 
-    // Match 5XXXXXXXX
-    const match5 = normalizedText.match(/\b5[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d\b/g);
-    if (match5) match5.forEach(m => matches.push("966" + m.replace(/\D/g, '')));
+    // 2. Customer context matching (Score: 80)
+    const custRegex = /(?:عميل|زبون|مشترك|مشتري|المكرم|السيد|customer|client|buyer)[\s\S]{0,50}?((?:\+?966|00966|0)?5[\d\s\-\.\/\(\)]{7,15}\d)/gi;
+    let custMatch;
+    while ((custMatch = custRegex.exec(cleanText)) !== null) {
+        addCandidate(custMatch[1], 80);
+    }
 
-    const uniqueMatches = [...new Set(matches)];
-    const validMatches = uniqueMatches.filter(num => !blacklist.includes(num));
+    // 3. International format (Score: 60)
+    const intlRegex = /(?:(?:\+966|00966)[\s\-\.]?5[\d\s\-\.]{7,12}\d|(?<!\d)966[\s\-\.]?5[\d\s\-\.]{7,12}\d)/g;
+    let intlMatch;
+    while ((intlMatch = intlRegex.exec(cleanText)) !== null) {
+        addCandidate(intlMatch[0], 60);
+    }
 
-    return validMatches.length > 0 ? validMatches[0] : null;
+    // 4. Standard 05XXXXXXXX format (Score: 50)
+    const standard05Regex = /(?<!\d)05[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d(?!\d)/g;
+    let sMatch;
+    while ((sMatch = standard05Regex.exec(cleanText)) !== null) {
+        addCandidate(sMatch[0], 50);
+    }
+
+    // 5. 9-digit format 5XXXXXXXX (Score: 30)
+    const nineDigitRegex = /(?<!\d)5[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d(?!\d)/g;
+    let nMatch;
+    while ((nMatch = nineDigitRegex.exec(cleanText)) !== null) {
+        addCandidate(nMatch[0], 30);
+    }
+
+    // 6. Filename fallback (Score: 20)
+    if (filename) {
+        const cleanFile = normalizeDigits(filename);
+        const fileMatches = cleanFile.match(/(?:(?:\+966|00966|966)?0?5\d{8})/g);
+        if (fileMatches) {
+            fileMatches.forEach(m => addCandidate(m, 20));
+        }
+    }
+
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0].number;
 }
 
 // Increment daily counter helper
@@ -556,6 +607,38 @@ app.post('/api/whatsapp/restart', async (req, res) => {
     }
 });
 
+app.post('/api/whatsapp/reset', async (req, res) => {
+    try {
+        console.log(`[Reset] Resetting session for branch: ${activeBranchId}...`);
+        if (client) {
+            try {
+                await client.destroy();
+            } catch (e) {
+                console.error('Error destroying client on reset:', e.message);
+            }
+            client = null;
+        }
+        isWhatsappReady = false;
+        lastQR = null;
+        io.emit('ready', false);
+
+        const sessionPath = path.join(__dirname, '.wwebjs_auth', `session-${activeBranchId}`);
+        if (fs.existsSync(sessionPath)) {
+            try {
+                fs.rmSync(sessionPath, { recursive: true, force: true });
+                console.log(`[Reset] Removed old session folder: ${sessionPath}`);
+            } catch (rmErr) {
+                console.error('Error removing session directory:', rmErr.message);
+            }
+        }
+
+        initializeBranch(activeBranchId);
+        res.json({ success: true, message: 'تم مسح بيانات الجلسة وتوليد رمز QR جديد.' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.post('/api/whatsapp/logout', async (req, res) => {
     try {
         if (client) {
@@ -566,6 +649,16 @@ app.post('/api/whatsapp/logout', async (req, res) => {
         isWhatsappReady = false;
         lastQR = null;
         io.emit('ready', false);
+
+        const sessionPath = path.join(__dirname, '.wwebjs_auth', `session-${activeBranchId}`);
+        if (fs.existsSync(sessionPath)) {
+            try {
+                fs.rmSync(sessionPath, { recursive: true, force: true });
+            } catch (rmErr) {
+                console.error('Error removing session directory:', rmErr.message);
+            }
+        }
+
         initializeBranch(activeBranchId);
         res.json({ success: true, message: 'تم تسجيل الخروج وإعادة توليد رمز QR' });
     } catch (e) {
@@ -632,11 +725,11 @@ app.post('/api/process', upload.array('invoices'), async (req, res) => {
             const data = await pdfParse(dataBuffer);
             
             let text = data.text || "";
-            let currentNumber = extractPhoneNumber(text, currentBranchId);
+            let currentNumber = extractPhoneNumber(text, currentBranchId, originalName);
             let customerName = findCustomerNameInText(text);
             
-            if (!currentNumber || text.trim().length < 5) {
-                 results.push({ file: originalName, success: false, reason: 'لم يتم العثور على نص أو رقم جوال.' });
+            if (!currentNumber) {
+                 results.push({ file: originalName, success: false, reason: 'لم يتم العثور على رقم جوال في الفاتورة.' });
                  io.emit('statusUpdate', { file: originalName, status: 'error', message: 'لم يتم العثور على رقم جوال' });
                  safeUnlink(filePath);
                  continue;

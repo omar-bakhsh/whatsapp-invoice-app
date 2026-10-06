@@ -318,6 +318,8 @@ body {
 .qr-actions {
     display: flex;
     justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 /* Connected State */
@@ -831,8 +833,17 @@ body {
     gap: 10px;
     margin-bottom: 8px;
 }
-.wa-pdf-icon { font-size: 1.4rem; }
-.wa-pdf-meta { display: flex; flex-direction: column; }
+.wa-pdf-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
+    background: #fee2e2;
+    color: #ef4444;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
 .wa-pdf-title { font-size: 0.85rem; font-weight: 700; color: #111; }
 .wa-pdf-size { font-size: 0.72rem; color: #666; }
 .wa-message-text {

@@ -10,6 +10,7 @@ const loader = document.getElementById('loader');
 const readyContainer = document.getElementById('ready-container');
 const statusBadge = document.getElementById('status-badge');
 const refreshSessionBtn = document.getElementById('refresh-session-btn');
+const resetSessionBtn = document.getElementById('reset-session-btn');
 const logoutBtn = document.getElementById('logout-btn');
 const activeBranchLabel = document.getElementById('active-branch-label');
 
@@ -155,11 +156,15 @@ function findCustomerNameInText(text) {
     return "";
 }
 
-// --- Arabic Digit Normalizer ---
+// --- Arabic & Persian Digit Normalizer and Unicode Cleaner ---
 function normalizeDigits(str) {
     if (!str) return "";
+    let cleaned = String(str).replace(/[\u200B-\u200F\u202A-\u202E\uFEFF\u00A0]/g, ' ');
     const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-    return str.replace(/[٠-٩]/g, d => arabicDigits.indexOf(d).toString());
+    cleaned = cleaned.replace(/[٠-٩]/g, d => arabicDigits.indexOf(d).toString());
+    const persianDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+    cleaned = cleaned.replace(/[۰-۹]/g, d => persianDigits.indexOf(d).toString());
+    return cleaned;
 }
 
 // --- Spintax Parser (Strictly requires | to avoid mangling {tags}) ---
@@ -398,19 +403,36 @@ saveSettingsBtn.addEventListener('click', async () => {
         console.error('Error saving settings:', err);
     } finally {
         saveSettingsBtn.disabled = false;
-        saveSettingsBtn.innerHTML = '<span>💾 حفظ إعدادات الفرع والحماية</span>';
+        saveSettingsBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg><span>حفظ إعدادات الفرع والحماية</span>';
     }
 });
 
 // WhatsApp Session Management
 refreshSessionBtn.addEventListener('click', async () => {
-    if (confirm('هل تريد إعادة تهيئة جلسة واتساب وتحديث الرمز؟')) {
+    if (confirm('هل تريد إعادة محاولة تهيئة جلسة واتساب وتحديث الرمز؟')) {
+        loader.style.display = 'flex';
+        qrImage.style.display = 'none';
+        statusBadge.querySelector('.status-text').textContent = 'جاري إعادة التهيئة...';
         await fetch('/api/whatsapp/restart', { method: 'POST' });
     }
 });
 
+if (resetSessionBtn) {
+    resetSessionBtn.addEventListener('click', async () => {
+        if (confirm('هل أنت متأكد من مسح الجلسة والبدء من جديد؟\nسيتم حذف بيانات الجلسة المؤقتة لهذا الفرع وتوليد كود QR جديد كلياً.')) {
+            loader.style.display = 'flex';
+            qrImage.style.display = 'none';
+            statusBadge.querySelector('.status-text').textContent = 'جاري مسح الجلسة...';
+            await fetch('/api/whatsapp/reset', { method: 'POST' });
+        }
+    });
+}
+
 logoutBtn.addEventListener('click', async () => {
     if (confirm('هل أنت متأكد من رغبتك في تسجيل الخروج من واتساب لهذا الفرع؟')) {
+        loader.style.display = 'flex';
+        qrImage.style.display = 'none';
+        statusBadge.querySelector('.status-text').textContent = 'جاري تسجيل الخروج...';
         await fetch('/api/whatsapp/logout', { method: 'POST' });
     }
 });
@@ -443,7 +465,7 @@ socket.on('ready', (status) => {
         qrContainer.style.display = 'none';
         readyContainer.style.display = 'flex';
         statusBadge.className = 'badge-status badge-online';
-        statusBadge.querySelector('.status-text').textContent = 'متصل ومحمي 🛡️';
+        statusBadge.querySelector('.status-text').textContent = 'متصل ومحمي';
     } else {
         if (!isSwitching) {
             qrContainer.style.display = 'block';
@@ -461,7 +483,20 @@ socket.on('ready', (status) => {
 socket.on('authenticated', () => {
     qrImage.style.display = 'none';
     loader.style.display = 'flex';
+    statusBadge.className = 'badge-status badge-offline';
     statusBadge.querySelector('.status-text').textContent = 'جاري المزامنة...';
+    const p = loader.querySelector('p');
+    if (p) p.textContent = 'تم تسجيل الدخول بنجاح! جاري مزامنة المحادثات مع الهاتف...';
+});
+
+socket.on('loadingScreen', (data) => {
+    qrImage.style.display = 'none';
+    loader.style.display = 'flex';
+    const pct = (data && data.percent) ? `${data.percent}%` : '';
+    const text = `جاري مزامنة واتساب... ${pct}`;
+    statusBadge.querySelector('.status-text').textContent = text;
+    const p = loader.querySelector('p');
+    if (p) p.textContent = text;
 });
 
 socket.on('error', (message) => {
@@ -653,93 +688,138 @@ directSendBtn.addEventListener('click', async () => {
         updateRecord(fileName, customerName, rawPhone, 'error', 'خطأ في الاتصال بالخادم');
     } finally {
         directSendBtn.disabled = false;
-        directSendBtn.innerHTML = '<span>✉️ إرسال الفاتورة الآن (مع محاكاة الكتابة)</span>';
+        directSendBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg><span>إرسال الفاتورة الآن (مع محاكاة الكتابة)</span>';
         checkReadyState();
     }
 });
 
-// --- Smart Extraction (Strictly from inside PDF Text / OCR) ---
+// --- Smart Extraction (All PDF Pages, Contextual Multi-Strategy & High-Res OCR Fallback) ---
 async function extractDataFromPDF(file) {
     try {
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        const page = await pdf.getPage(1);
         
-        // 1. Digital text layer
-        const textContent = await page.getTextContent();
-        const rawText = textContent.items.map(item => item.str).join(' ');
-        const normalizedText = normalizeDigits(rawText);
-        
-        let number = findPhoneNumber(normalizedText);
+        // 1. Digital text layer across ALL pages
+        let fullText = "";
+        for (let p = 1; p <= pdf.numPages; p++) {
+            const page = await pdf.getPage(p);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str).join(' ');
+            fullText += " " + pageText;
+        }
+
+        const normalizedText = normalizeDigits(fullText);
+        let number = findPhoneNumber(normalizedText, file.name);
         let name = findCustomerNameInText(normalizedText);
         
         if (number) return { number, name: name || "" };
 
         // 2. High-res OCR fallback for scanned images
-        const viewport = page.getViewport({ scale: 2.2 });
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
+        if (pdf.numPages > 0) {
+            const page = await pdf.getPage(1);
+            const viewport = page.getViewport({ scale: 2.2 });
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
 
-        await page.render({ canvasContext: context, viewport: viewport }).promise;
-        const imageData = canvas.toDataURL('image/png');
+            await page.render({ canvasContext: context, viewport: viewport }).promise;
+            const imageData = canvas.toDataURL('image/png');
 
-        updateRecord(file.name, name, '---', 'processing', 'جاري المسح الضوئي (OCR)...');
-        const result = await Tesseract.recognize(imageData, 'ara+eng');
-        const ocrText = normalizeDigits(result.data.text);
-        
+            updateRecord(file.name, name, '---', 'processing', 'جاري المسح الضوئي (OCR)...');
+            const result = await Tesseract.recognize(imageData, 'ara+eng');
+            const ocrText = normalizeDigits(result.data.text);
+            
+            number = findPhoneNumber(ocrText, file.name);
+            name = name || findCustomerNameInText(ocrText) || "";
+        }
+
+        // 3. Fallback: Check filename if still no number
+        if (!number) {
+            number = findPhoneNumber("", file.name);
+        }
+
         return {
-            number: findPhoneNumber(ocrText),
-            name: name || findCustomerNameInText(ocrText) || ""
+            number,
+            name: name || ""
         };
     } catch (err) {
         console.error('Extraction Error:', err);
-        return { number: null, name: "" };
+        const fallbackNum = findPhoneNumber("", file.name);
+        return { number: fallbackNum, name: "" };
     }
 }
 
-function findPhoneNumber(text) {
-    if (!text) return null;
-    const branch = appSettings.branches ? appSettings.branches[currentBranchId] : {};
-    const blacklist = (branch.blacklist || []).map(b => normalizeDigits(b).replace(/\D/g, ''));
+function findPhoneNumber(text, filename = "") {
+    if (!text && !filename) return null;
+    const branch = (appSettings && appSettings.branches) ? appSettings.branches[currentBranchId] : {};
+    const blacklist = (branch && branch.blacklist ? branch.blacklist : []).map(b => normalizeDigits(b).replace(/\D/g, ''));
     
-    const matches = [];
+    const cleanText = normalizeDigits(text || "");
+    const candidates = [];
 
-    // +9665XXXXXXXX or 009665XXXXXXXX
-    const matchIntl = text.match(/(?:\+966|00966)[\s-]?([5]\d{8})\b/g);
-    if (matchIntl) {
-        matchIntl.forEach(m => {
-            const clean = m.replace(/\D/g, '');
-            if (clean.startsWith('00966')) matches.push('966' + clean.substring(5));
-            else if (clean.startsWith('966')) matches.push(clean);
-        });
-    }
+    function addCandidate(raw, score = 0) {
+        if (!raw) return;
+        let digits = normalizeDigits(raw).replace(/\D/g, '');
+        if (digits.startsWith('00966')) digits = digits.slice(2);
+        if (digits.startsWith('96605')) digits = '966' + digits.slice(4);
+        if (digits.startsWith('05') && digits.length === 10) digits = '966' + digits.slice(1);
+        if (digits.startsWith('5') && digits.length === 9) digits = '966' + digits;
 
-    // 05XXXXXXXX (with optional spaces/dashes)
-    const match05 = text.match(/\b05[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d\b/g);
-    if (match05) match05.forEach(m => matches.push("966" + m.replace(/\D/g, '').substring(1)));
-
-    // 5XXXXXXXX
-    const match5 = text.match(/\b5[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d\b/g);
-    if (match5) match5.forEach(m => matches.push("966" + m.replace(/\D/g, '')));
-
-    const validMatches = [...new Set(matches)].filter(num => !blacklist.includes(num));
-
-    if (validMatches.length > 1) {
-        for (const num of validMatches) {
-            const short = num.replace("966", "");
-            const idx = text.indexOf(short);
-            if (idx !== -1) {
-                const ctx = text.substring(Math.max(0, idx - 50), idx + short.length + 30);
-                if (ctx.includes("جوال") || ctx.includes("عميل") || ctx.includes("هاتف") || ctx.includes("موبايل")) {
-                    return num;
-                }
+        if (digits.length === 12 && digits.startsWith('9665')) {
+            if (!blacklist.includes(digits) && !blacklist.includes('0' + digits.slice(3))) {
+                candidates.push({ number: digits, score });
             }
         }
     }
 
-    return validMatches.length > 0 ? validMatches[0] : null;
+    // 1. Keyword-based matching (Highest score: 100)
+    const keywordRegex = /(?:جوال|موبايل|هاتف|تلفون|phone|mobile|tel|cell|contact)[\s\S]{0,25}?((?:\+?966|00966|0)?5[\d\s\-\.\/\(\)]{7,15}\d)/gi;
+    let kwMatch;
+    while ((kwMatch = keywordRegex.exec(cleanText)) !== null) {
+        addCandidate(kwMatch[1], 100);
+    }
+
+    // 2. Customer context matching (Score: 80)
+    const custRegex = /(?:عميل|زبون|مشترك|مشتري|المكرم|السيد|customer|client|buyer)[\s\S]{0,50}?((?:\+?966|00966|0)?5[\d\s\-\.\/\(\)]{7,15}\d)/gi;
+    let custMatch;
+    while ((custMatch = custRegex.exec(cleanText)) !== null) {
+        addCandidate(custMatch[1], 80);
+    }
+
+    // 3. International format (Score: 60)
+    const intlRegex = /(?:(?:\+966|00966)[\s\-\.]?5[\d\s\-\.]{7,12}\d|(?<!\d)966[\s\-\.]?5[\d\s\-\.]{7,12}\d)/g;
+    let intlMatch;
+    while ((intlMatch = intlRegex.exec(cleanText)) !== null) {
+        addCandidate(intlMatch[0], 60);
+    }
+
+    // 4. Standard 05XXXXXXXX format (Score: 50)
+    const standard05Regex = /(?<!\d)05[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d(?!\d)/g;
+    let sMatch;
+    while ((sMatch = standard05Regex.exec(cleanText)) !== null) {
+        addCandidate(sMatch[0], 50);
+    }
+
+    // 5. 9-digit format 5XXXXXXXX (Score: 30)
+    const nineDigitRegex = /(?<!\d)5[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d[\s\-\.\/]?\d(?!\d)/g;
+    let nMatch;
+    while ((nMatch = nineDigitRegex.exec(cleanText)) !== null) {
+        addCandidate(nMatch[0], 30);
+    }
+
+    // 6. Filename fallback (Score: 20)
+    if (filename) {
+        const cleanFile = normalizeDigits(filename);
+        const fileMatches = cleanFile.match(/(?:(?:\+966|00966|966)?0?5\d{8})/g);
+        if (fileMatches) {
+            fileMatches.forEach(m => addCandidate(m, 20));
+        }
+    }
+
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0].number;
 }
 
 // --- Anti-Ban Countdown Helper ---
@@ -830,12 +910,12 @@ processBtn.addEventListener('click', async () => {
         if (i < total - 1 && !isProcessingCancelled) {
             if (consecutiveSent > 0 && consecutiveSent % antiBan.batchSize === 0) {
                 const cooldownDuration = antiBan.batchCooldown || 60;
-                await countdown(cooldownDuration, "⏸️ استراحة وتبريد بعد دفعة فواتير (حماية من الحظر)");
+                await countdown(cooldownDuration, "استراحة وتبريد بعد دفعة فواتير (حماية من الحظر)");
             } else {
                 const min = antiBan.minDelay || 10;
                 const max = antiBan.maxDelay || 20;
                 const randomSeconds = Math.floor(Math.random() * (max - min + 1)) + min;
-                await countdown(randomSeconds, "🛡️ فاصل أمان عشوائي");
+                await countdown(randomSeconds, "فاصل أمان عشوائي بين الرسائل");
             }
         }
     }
